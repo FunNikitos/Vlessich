@@ -23,16 +23,25 @@ cd ansible/
 cp inventory/hosts.example.yml inventory/hosts.yml
 # Заполнить inventory: IP, hostname
 
-# Создать vault для секретов
-ansible-vault create group_vars/vpn_nodes/vault.yml
-# → положить:
-#   vault_fwknop_key_base64: "..."
-#   vault_fwknop_hmac_base64: "..."
-#   vault_borg_passphrase: "..."
+# Общие переменные (SSH-ключи админов!)
+cp group_vars/all.yml.example group_vars/all.yml
+#   → ssh_pubkeys: ["ssh-ed25519 AAAA... admin@laptop"]
+#   ⚠️ ОБЯЗАТЕЛЬНО заполнить ssh_pubkeys ДО первого деплоя, иначе после
+#      включения fwknop SSH на ноде станет недоступен.
 
-# Положить SSH-ключи администраторов в group_vars/all.yml
-# → ssh_pubkeys: ["ssh-ed25519 AAAA... admin@laptop"]
+# Секреты (fwknop, borg, s3, cloudflare)
+cp group_vars/vpn_nodes/vault.yml.example group_vars/vpn_nodes/vault.yml
+# → заполнить, затем:
+ansible-vault encrypt group_vars/vpn_nodes/vault.yml
 ```
+
+### Pre-flight checklist (перед `make deploy-node`)
+
+- [ ] `inventory/hosts.yml` заполнен реальным IP и hostname.
+- [ ] `group_vars/all.yml` содержит хотя бы один `ssh_pubkeys`.
+- [ ] `group_vars/vpn_nodes/vault.yml` зашифрован и содержит все `vault_*`.
+- [ ] SSH доступ к ноде на стандартном порту 22 работает (`ssh root@<ip>`).
+- [ ] DNS `public_hostname` → IP ноды уже прописан (для ACME).
 
 ## Деплой
 
