@@ -53,23 +53,30 @@ down:  ## Остановить dev-окружение
 logs:  ## Логи dev-окружения
 	docker compose -f docker-compose.dev.yml logs -f --tail=100
 
+# -- Frontend setup ----------------------------------------------------------
+
+.PHONY: frontend-install
+frontend-install:  ## Установить зависимости webapp + admin (npm)
+	npm --prefix webapp install
+	npm --prefix admin install
+
 # -- Test / lint -------------------------------------------------------------
 
 .PHONY: test lint typecheck
 test:  ## Прогнать pytest + vitest
 	cd bot && pytest
 	cd api && pytest
-	cd webapp && pnpm test
-	cd admin && pnpm test
+	npm --prefix webapp test
+	npm --prefix admin test
 
 lint:  ## Линтеры (ruff + eslint + prettier)
 	cd bot && ruff check . && ruff format --check .
 	cd api && ruff check . && ruff format --check .
-	cd webapp && pnpm lint
-	cd admin && pnpm lint
+	npm --prefix webapp run lint
+	npm --prefix admin run lint
 
 typecheck:  ## mypy + tsc
 	cd bot && mypy --strict .
 	cd api && mypy --strict .
-	cd webapp && pnpm tsc --noEmit
-	cd admin && pnpm tsc --noEmit
+	npm --prefix webapp run typecheck
+	npm --prefix admin run typecheck
