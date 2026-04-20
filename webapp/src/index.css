@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --tg-viewport-height: 100vh;
+}
+
+html, body, #root { height: 100%; }
+body { -webkit-font-smoothing: antialiased; }
+
+/* Spotify-like pill button */
+@layer components {
+  .btn-pill {
+    @apply inline-flex items-center justify-center rounded-pill bg-brand-green
+           text-black font-bold uppercase tracking-[1.4px] text-sm px-6 py-3
+           transition-transform active:scale-[0.97] hover:bg-[#1fdf6c];
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center rounded-pill border
+           border-border-muted text-text-base font-semibold uppercase
+           tracking-[1.4px] text-sm px-6 py-3 hover:border-text-base;
+  }
+  .card {
+    @apply rounded-xl bg-bg-card p-5 shadow-elevated;
+  }
+}

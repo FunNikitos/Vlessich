@@ -1,0 +1,48 @@
+---
+# Caddy — HTTPS фасад (см. caddy/Caddyfile)
+
+- name: Create Caddy directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /opt/caddy
+    - /var/www/finnish-cloud-services
+    - /var/log/caddy
+
+- name: Clone static landing content
+  ansible.builtin.git:
+    repo: "{{ caddy_landing_repo }}"
+    dest: /var/www/finnish-cloud-services
+    version: main
+    force: true
+  when: caddy_landing_repo is defined and caddy_landing_repo != ""
+  ignore_errors: true
+
+- name: Deploy Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /opt/caddy/Caddyfile
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart caddy
+
+- name: Run Caddy container
+  community.docker.docker_container:
+    name: caddy
+    image: "{{ caddy_image }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host            # для прямой работы на :80/:443
+    volumes:
+      - /opt/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /var/www/finnish-cloud-services:/var/www/finnish-cloud-services:ro
+      - /var/log/caddy:/var/log/caddy
+      - caddy_data:/data
+      - caddy_config:/config
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"

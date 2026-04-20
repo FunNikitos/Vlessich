@@ -1,0 +1,30 @@
+---
+# nftables baseline: drop-policy + scanner blocklist + разрешённые порты
+
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Disable ufw (заменяем на nftables)
+  ansible.builtin.systemd:
+    name: ufw
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Deploy nftables ruleset
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "nft -c -f %s"
+  notify: reload nftables
+
+- name: Enable nftables service
+  ansible.builtin.systemd:
+    name: nftables
+    state: started
+    enabled: true

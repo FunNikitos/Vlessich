@@ -1,0 +1,62 @@
+---
+# Xray-core — VLESS + Reality + XHTTP (H3/H2) + Vision + Hysteria2
+
+- name: Create Xray directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /opt/xray
+    - /opt/xray/config
+    - /var/log/xray
+
+- name: Generate Reality X25519 keypair (one-time)
+  ansible.builtin.command:
+    cmd: docker run --rm {{ xray_image }} x25519
+  register: reality_keys
+  changed_when: false
+  args:
+    creates: /opt/xray/config/reality-keys.txt
+
+- name: Save Reality keys
+  ansible.builtin.copy:
+    dest: /opt/xray/config/reality-keys.txt
+    content: "{{ reality_keys.stdout }}"
+    mode: "0600"
+  when: reality_keys.changed
+
+- name: Read Reality private key
+  ansible.builtin.shell: |
+    grep -oP 'Private key: \K.*' /opt/xray/config/reality-keys.txt | tr -d '[:space:]'
+  register: reality_private_key
+  changed_when: false
+
+- name: Generate random short IDs
+  ansible.builtin.set_fact:
+    reality_short_id: "{{ lookup('password', '/dev/null length=8 chars=hexdigits') | lower }}"
+
+- name: Deploy Xray config
+  ansible.builtin.template:
+    src: xray.config.json.j2
+    dest: /opt/xray/config/config.json
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart xray
+
+- name: Run Xray container
+  community.docker.docker_container:
+    name: xray
+    image: "{{ xray_image }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host              # важно для Reality (источник на реальном :443)
+    volumes:
+      - /opt/xray/config:/etc/xray:ro
+      - /var/log/xray:/var/log/xray
+    command: ["xray", "run", "-c", "/etc/xray/config.json"]
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"

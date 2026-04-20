@@ -1,0 +1,36 @@
+---
+# AdGuard Home — DNS filtering (ads + trackers + malware)
+
+- name: Create AGH directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /opt/adguardhome
+    - /opt/adguardhome/work
+    - /opt/adguardhome/conf
+
+- name: Deploy AGH config
+  ansible.builtin.template:
+    src: AdGuardHome.yaml.j2
+    dest: /opt/adguardhome/conf/AdGuardHome.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart adguardhome
+
+- name: Run AdGuard Home container
+  community.docker.docker_container:
+    name: adguardhome
+    image: "{{ agh_image }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/adguardhome/work:/opt/adguardhome/work
+      - /opt/adguardhome/conf:/opt/adguardhome/conf
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"

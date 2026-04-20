@@ -1,0 +1,125 @@
+# =============================================================================
+# Vlessich — Ansible role: node (defaults)
+# =============================================================================
+
+# --- Domain / hostnames ---
+public_domain: "example.com"
+public_hostname: "fi-01.example.com"
+admin_email: "admin@example.com"
+
+# --- SSH ---
+ssh_port_new: 62222              # custom SSH port (после fwknop SPA)
+ssh_allowed_users: ["deploy"]
+ssh_pubkeys: []                  # список SSH-ключей администраторов
+fwknop_enabled: true
+cowrie_honeypot_enabled: true    # fake SSH на :22
+
+# --- Xray / Reality ---
+xray_image: "ghcr.io/xtls/xray-core:latest"
+xray_reality_dest: "www.microsoft.com:443"
+xray_reality_server_names: ["www.microsoft.com"]
+xray_reality_min_client_ver: "25.1.0"
+
+# Inbound порты
+xray_xhttp_h3_port: 443          # UDP (QUIC)
+xray_xhttp_h2_port: 443          # TCP (одновременно с H3 на разных протоколах)
+xray_vision_port: 8443           # TCP (legacy fallback)
+xray_hysteria2_port: 8444        # UDP
+
+# Cloak-домены для XHTTP path
+xray_xhttp_h3_path: "/api/v1/feed"
+xray_xhttp_h2_path: "/api/v2/sync"
+
+# --- AdGuard Home ---
+agh_image: "adguard/adguardhome:latest"
+agh_listen: "127.0.0.1"
+agh_port_dns: 53
+agh_port_admin: 3000             # доступен только через WG-туннель
+agh_filters:
+  - { name: "AdGuard DNS",   url: "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt" }
+  - { name: "OISD Big",      url: "https://big.oisd.nl" }
+  - { name: "EasyList",      url: "https://easylist.to/easylist/easylist.txt" }
+  - { name: "EasyPrivacy",   url: "https://easylist.to/easylist/easyprivacy.txt" }
+  - { name: "HaGeZi Pro",    url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt" }
+  - { name: "RU AdList",     url: "https://easylist-downloads.adblockplus.org/advblock+cssfixes.txt" }
+  - { name: "NoCoin",        url: "https://gitlab.com/ZeroDot1/CoinBlockerLists/raw/master/hosts" }
+
+# --- Caddy ---
+caddy_image: "caddy:2-alpine"
+caddy_landing_repo: "https://github.com/your-org/finnish-cloud-services-landing.git"
+
+# --- mtg (MTProto-прокси) ---
+# В production ставится на отдельной ноде. Здесь — переключатель.
+mtg_enabled: false                # на FI-ноде по умолчанию выключено
+mtg_image: "nineseconds/mtg:2"
+mtg_port: 8443                    # на отдельной ноде это будет основной порт
+mtg_cloak_host: "www.microsoft.com"
+
+# --- nftables ---
+# Закрываем всё, кроме нужного.
+nft_allowed_tcp_ports:
+  - 80                             # Caddy (HTTP→HTTPS redirect)
+  - 443                            # Reality + XHTTP H2
+  - 8443                           # Vision legacy
+  - "{{ ssh_port_new }}"           # SSH (после fwknop)
+nft_allowed_udp_ports:
+  - 443                            # XHTTP H3
+  - 8444                           # Hysteria2
+
+# Известные сканеры (CIDR/AS-блоки) — будут BLACKHOLE-rule
+nft_scanner_cidrs:
+  # Censys
+  - "162.142.125.0/24"
+  - "167.94.138.0/24"
+  - "167.94.145.0/24"
+  - "167.94.146.0/24"
+  # Shodan
+  - "198.20.69.0/24"
+  - "198.20.70.0/24"
+  - "198.20.87.0/24"
+  - "208.180.20.0/24"
+  - "66.240.192.0/24"
+  - "66.240.236.0/24"
+  - "71.6.135.0/24"
+  - "71.6.146.0/24"
+  - "71.6.158.0/24"
+  - "71.6.165.0/24"
+  - "71.6.167.0/24"
+  - "82.221.105.0/24"
+  - "85.25.103.50/32"
+  - "188.138.9.50/32"
+  # GreyNoise
+  - "159.65.66.0/24"
+  - "104.131.69.0/24"
+  # BinaryEdge
+  - "5.255.250.0/24"
+  - "5.255.253.0/24"
+  - "5.255.254.0/24"
+
+# --- Sysctl (BBR + tuning) ---
+sysctl_settings:
+  net.core.default_qdisc: "fq"
+  net.ipv4.tcp_congestion_control: "bbr"
+  net.ipv4.tcp_fastopen: 3
+  net.ipv4.tcp_mtu_probing: 1
+  net.ipv4.tcp_notsent_lowat: 16384
+  net.core.rmem_max: 67108864
+  net.core.wmem_max: 67108864
+  net.ipv4.tcp_rmem: "4096 87380 67108864"
+  net.ipv4.tcp_wmem: "4096 65536 67108864"
+  net.ipv4.udp_rmem_min: 8192
+  net.ipv4.udp_wmem_min: 8192
+  net.ipv4.ip_forward: 1
+  net.ipv6.conf.all.forwarding: 1
+  fs.file-max: 1000000
+
+# --- Monitoring ---
+prometheus_node_exporter_enabled: true
+promtail_enabled: true
+loki_url: "https://loki.example.internal/loki/api/v1/push"
+
+# --- Backup ---
+borg_enabled: true
+borg_repo: "ssh://borg@backup.example.com/./vlessich-{{ inventory_hostname }}"
+borg_passphrase: "{{ vault_borg_passphrase }}"
+borg_schedule: "hourly"

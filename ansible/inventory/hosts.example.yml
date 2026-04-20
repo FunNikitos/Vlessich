@@ -1,0 +1,19 @@
+# Пример инвентаря для Vlessich FI-ноды
+# Скопируй как inventory/hosts.yml и подставь реальные значения.
+# Секреты — через ansible-vault или sops.
+
+all:
+  vars:
+    ansible_user: root
+    ansible_ssh_port: 22         # первый запуск — стандартный, потом 62222
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    vpn_nodes:
+      hosts:
+        fi-01:
+          ansible_host: 1.2.3.4
+          node_name: fi-01
+          node_country: FI
+          public_hostname: fi-01.example.com
+          # Специфичные overrides можно класть сюда

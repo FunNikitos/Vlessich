@@ -1,0 +1,78 @@
+# Vlessich — dev compose (control-plane: bot + api + webapp + admin + db + redis).
+# FI-node (Xray/AGH/Caddy/mtg) provisioned via Ansible на отдельном хосте.
+
+name: vlessich-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vlessich
+      POSTGRES_USER: vlessich
+      POSTGRES_PASSWORD: vlessich
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vlessich -d vlessich"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    env_file: ./api/.env.dev
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - ./api:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  bot:
+    build: ./bot
+    restart: unless-stopped
+    env_file: ./bot/.env.dev
+    depends_on:
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+    volumes:
+      - ./bot:/app
+
+  webapp:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:80"
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5174:80"
+
+volumes:
+  pgdata:

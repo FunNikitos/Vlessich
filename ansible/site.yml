@@ -1,0 +1,24 @@
+# =============================================================================
+# Vlessich — Ansible playbook для FI-ноды
+# =============================================================================
+# Использование:
+#   ansible-playbook -i inventory/fi-01.yml site.yml
+#
+# Инвентарь: inventory/fi-01.yml (см. пример ниже).
+# =============================================================================
+
+- name: Provision Vlessich VPN node
+  hosts: vpn_nodes
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: node
+
+  post_tasks:
+    - name: Reboot if kernel updated
+      ansible.builtin.reboot:
+        msg: "Kernel update, rebooting"
+        connect_timeout: 5
+        reboot_timeout: 300
+      when: reboot_required.stat.exists | default(false)

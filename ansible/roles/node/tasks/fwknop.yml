@@ -1,0 +1,41 @@
+---
+# fwknop — Single-Packet Authorization для SSH
+
+- name: Install fwknop server
+  ansible.builtin.apt:
+    name:
+      - fwknop-server
+    state: present
+
+- name: Configure fwknopd access.conf
+  ansible.builtin.copy:
+    dest: /etc/fwknop/access.conf
+    content: |
+      SOURCE              ANY
+      OPEN_PORTS          tcp/{{ ssh_port_new }}
+      FW_ACCESS_TIMEOUT   30
+      KEY_BASE64          {{ vault_fwknop_key_base64 }}
+      HMAC_KEY_BASE64     {{ vault_fwknop_hmac_base64 }}
+      REQUIRE_SOURCE_ADDRESS  Y
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart fwknop
+
+- name: Configure fwknopd.conf
+  ansible.builtin.copy:
+    dest: /etc/fwknop/fwknopd.conf
+    content: |
+      PCAP_INTF             eth0
+      ENABLE_IPT_FORWARDING N
+      FIREWALL_EXE          /usr/sbin/iptables
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart fwknop
+
+- name: Enable fwknop
+  ansible.builtin.systemd:
+    name: fwknop-server
+    state: started
+    enabled: true

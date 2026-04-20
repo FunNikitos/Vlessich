@@ -1,0 +1,98 @@
+# =============================================================================
+# Vlessich — node role: main task entrypoint
+# =============================================================================
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ node_name }}"
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  changed_when: false
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - jq
+      - python3-pip
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+      - software-properties-common
+      - unattended-upgrades
+      - ufw                   # уберём, заменим nftables — но удобный helper
+      - fail2ban
+      - rsyslog
+      - chrony                # NTP
+      - tzdata
+    state: present
+
+- name: Set timezone to UTC
+  community.general.timezone:
+    name: Etc/UTC
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    mode: "0644"
+
+- name: Reboot-required check
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+
+# --- Подзадачи ---
+- ansible.builtin.import_tasks: sysctl.yml
+  tags: [sysctl, performance]
+
+- ansible.builtin.import_tasks: ssh.yml
+  tags: [ssh, security]
+
+- ansible.builtin.import_tasks: nftables.yml
+  tags: [nftables, security, firewall]
+
+- ansible.builtin.import_tasks: fwknop.yml
+  tags: [fwknop, security]
+  when: fwknop_enabled
+
+- ansible.builtin.import_tasks: cowrie.yml
+  tags: [cowrie, security, honeypot]
+  when: cowrie_honeypot_enabled
+
+- ansible.builtin.import_tasks: docker.yml
+  tags: [docker]
+
+- ansible.builtin.import_tasks: caddy.yml
+  tags: [caddy, web]
+
+- ansible.builtin.import_tasks: xray.yml
+  tags: [xray, vpn]
+
+- ansible.builtin.import_tasks: adguardhome.yml
+  tags: [agh, dns, adblock]
+
+- ansible.builtin.import_tasks: mtg.yml
+  tags: [mtg, mtproto]
+  when: mtg_enabled
+
+- ansible.builtin.import_tasks: monitoring.yml
+  tags: [monitoring, observability]
+
+- ansible.builtin.import_tasks: backup.yml
+  tags: [backup, borg]
+  when: borg_enabled
+
+- ansible.builtin.import_tasks: fail2ban.yml
+  tags: [fail2ban, security]

@@ -1,0 +1,37 @@
+---
+# Borg backups → S3-совместимое (iDrive e2 / Backblaze B2)
+
+- name: Install borgbackup
+  ansible.builtin.apt:
+    name: borgbackup
+    state: present
+
+- name: Create backup script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/vlessich-backup.sh
+    mode: "0750"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      export BORG_PASSPHRASE='{{ borg_passphrase }}'
+      export BORG_REPO='{{ borg_repo }}'
+
+      borg create --stats --compression zstd \
+        ::'{hostname}-{now:%Y-%m-%dT%H:%M:%S}' \
+        /opt/xray/config \
+        /opt/adguardhome/conf \
+        /opt/caddy \
+        /opt/mtg \
+        /etc/nftables.conf \
+        /etc/ssh/sshd_config.d \
+        /etc/fwknop
+
+      borg prune --keep-hourly=24 --keep-daily=7 --keep-weekly=4 --keep-monthly=6
+
+- name: Setup hourly cron for backup
+  ansible.builtin.cron:
+    name: vlessich-borg-backup
+    minute: "5"
+    job: "/usr/local/bin/vlessich-backup.sh >> /var/log/vlessich-backup.log 2>&1"
+    user: root
+  when: borg_schedule == "hourly"

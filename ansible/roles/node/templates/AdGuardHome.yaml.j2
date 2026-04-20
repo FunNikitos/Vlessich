@@ -1,0 +1,39 @@
+bind_host: {{ agh_listen }}
+bind_port: {{ agh_port_admin }}
+dns:
+  bind_hosts:
+    - {{ agh_listen }}
+  port: {{ agh_port_dns }}
+  upstream_dns:
+    - https://dns.quad9.net/dns-query
+    - https://dns.cloudflare.com/dns-query
+    - tls://1.1.1.1
+  bootstrap_dns:
+    - 9.9.9.10
+    - 1.1.1.1
+  all_servers: true
+  fastest_addr: true
+  enable_dnssec: true
+  cache_size: 67108864
+  cache_ttl_min: 60
+  cache_ttl_max: 3600
+  ratelimit: 0
+filters:
+{% for f in agh_filters %}
+  - enabled: true
+    url: "{{ f.url }}"
+    name: "{{ f.name }}"
+    id: {{ loop.index }}
+{% endfor %}
+filtering:
+  protection_enabled: true
+  filtering_enabled: true
+  parental_enabled: false
+  safebrowsing_enabled: true
+  safesearch_enabled: false
+querylog:
+  enabled: false              # без PII
+statistics:
+  enabled: true
+  interval: 24h
+schema_version: 20

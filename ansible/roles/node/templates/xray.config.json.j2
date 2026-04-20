@@ -1,0 +1,111 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-reality-xhttp-h3",
+      "listen": "0.0.0.0",
+      "port": {{ xray_xhttp_h3_port }},
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "reality",
+        "xhttpSettings": {
+          "host": "{{ xray_reality_server_names[0] }}",
+          "path": "{{ xray_xhttp_h3_path }}",
+          "mode": "stream-one",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxConcurrentPosts": 100
+          }
+        },
+        "realitySettings": {
+          "show": false,
+          "dest": "{{ xray_reality_dest }}",
+          "xver": 0,
+          "serverNames": {{ xray_reality_server_names | to_json }},
+          "privateKey": "{{ reality_private_key.stdout }}",
+          "minClientVer": "{{ xray_reality_min_client_ver }}",
+          "shortIds": ["", "{{ reality_short_id }}"]
+        }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"] }
+    },
+    {
+      "tag": "vless-reality-xhttp-h2",
+      "listen": "0.0.0.0",
+      "port": {{ xray_xhttp_h2_port }},
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "reality",
+        "xhttpSettings": {
+          "host": "{{ xray_reality_server_names[0] }}",
+          "path": "{{ xray_xhttp_h2_path }}",
+          "mode": "packet-up"
+        },
+        "realitySettings": {
+          "show": false,
+          "dest": "{{ xray_reality_dest }}",
+          "xver": 0,
+          "serverNames": {{ xray_reality_server_names | to_json }},
+          "privateKey": "{{ reality_private_key.stdout }}",
+          "shortIds": ["", "{{ reality_short_id }}"]
+        }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http","tls"] }
+    },
+    {
+      "tag": "vless-reality-vision",
+      "listen": "0.0.0.0",
+      "port": {{ xray_vision_port }},
+      "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none" },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "{{ xray_reality_dest }}",
+          "xver": 0,
+          "serverNames": {{ xray_reality_server_names | to_json }},
+          "privateKey": "{{ reality_private_key.stdout }}",
+          "minClientVer": "1.8.0",
+          "shortIds": ["", "{{ reality_short_id }}"]
+        }
+      },
+      "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"] }
+    },
+    {
+      "tag": "hysteria2",
+      "listen": "0.0.0.0",
+      "port": {{ xray_hysteria2_port }},
+      "protocol": "hysteria2",
+      "settings": {
+        "password": "{{ lookup('password', '/dev/null length=32') }}",
+        "obfs": {
+          "type": "salamander",
+          "password": "{{ lookup('password', '/dev/null length=32') }}"
+        }
+      },
+      "streamSettings": { "network": "udp" }
+    }
+  ],
+  "outbounds": [
+    { "tag": "direct", "protocol": "freedom", "settings": { "domainStrategy": "UseIPv4v6" } },
+    { "tag": "block",  "protocol": "blackhole" }
+  ],
+  "dns": { "servers": ["127.0.0.1"] },
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      { "type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block" },
+      { "type": "field", "ip": ["geoip:private"], "outboundTag": "block" }
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+---
+# SSH hardening + custom port
+
+- name: Create deploy user
+  ansible.builtin.user:
+    name: "{{ item }}"
+    shell: /bin/bash
+    groups: sudo
+    append: true
+    create_home: true
+  loop: "{{ ssh_allowed_users }}"
+
+- name: Add SSH pubkeys for deploy users
+  ansible.posix.authorized_key:
+    user: "{{ item.0 }}"
+    key: "{{ item.1 }}"
+    state: present
+  loop: "{{ ssh_allowed_users | product(ssh_pubkeys) | list }}"
+  when: ssh_pubkeys | length > 0
+
+- name: Harden sshd_config
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-vlessich.conf
+    content: |
+      Port {{ ssh_port_new }}
+      Protocol 2
+      PermitRootLogin no
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+      KbdInteractiveAuthentication no
+      UsePAM yes
+      PubkeyAuthentication yes
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      PermitEmptyPasswords no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      AllowUsers {{ ssh_allowed_users | join(' ') }}
+      KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+    mode: "0644"
+  notify: restart sshd
+
+- name: Ensure sshd is enabled
+  ansible.builtin.systemd:
+    name: ssh
+    state: started
+    enabled: true

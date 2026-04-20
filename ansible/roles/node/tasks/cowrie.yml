@@ -1,0 +1,26 @@
+---
+# Cowrie honeypot — fake SSH on :22 (отвлекает сканеры от реального SSH)
+
+- name: Install Docker (если ещё не стоит)
+  ansible.builtin.import_tasks: docker.yml
+
+- name: Create cowrie data dir
+  ansible.builtin.file:
+    path: /opt/cowrie
+    state: directory
+    mode: "0755"
+
+- name: Run Cowrie container
+  community.docker.docker_container:
+    name: cowrie
+    image: cowrie/cowrie:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "22:2222"
+    volumes:
+      - /opt/cowrie:/cowrie/cowrie-git/var
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"

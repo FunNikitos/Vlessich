@@ -1,0 +1,56 @@
+---
+# mtg — MTProto-прокси для Telegram (см. TZ §9A)
+# Обычно запускается на ОТДЕЛЬНОЙ ноде (mtp.example.com), но роль
+# поддерживает оба варианта — флаг mtg_enabled.
+
+- name: Create mtg directory
+  ansible.builtin.file:
+    path: /opt/mtg
+    state: directory
+    mode: "0755"
+
+- name: Generate MTProto secret
+  ansible.builtin.shell: |
+    docker run --rm {{ mtg_image }} generate-secret {{ mtg_cloak_host }}
+  register: mtg_secret_out
+  changed_when: false
+  args:
+    creates: /opt/mtg/secret.txt
+
+- name: Save MTProto secret
+  ansible.builtin.copy:
+    dest: /opt/mtg/secret.txt
+    content: "{{ mtg_secret_out.stdout | trim }}"
+    mode: "0600"
+  when: mtg_secret_out.changed
+
+- name: Read saved secret
+  ansible.builtin.slurp:
+    src: /opt/mtg/secret.txt
+  register: mtg_secret_file
+
+- name: Deploy mtg config
+  ansible.builtin.template:
+    src: mtg.config.toml.j2
+    dest: /opt/mtg/config.toml
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    mtg_secret: "{{ mtg_secret_file.content | b64decode | trim }}"
+  notify: restart mtg
+
+- name: Run mtg container
+  community.docker.docker_container:
+    name: mtg
+    image: "{{ mtg_image }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/mtg/config.toml:/config.toml:ro
+    command: ["run", "/config.toml"]
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"

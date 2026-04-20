@@ -1,0 +1,119 @@
+# =============================================================================
+# Vlessich — Caddy configuration
+# =============================================================================
+# Роль Caddy: HTTPS-фасад на FI-ноде.
+# - Отдаёт статический лендинг «Finnish Cloud Services» на :80 и :443.
+# - Авто-LE сертификат для fi-01.example.com.
+# - Работает как fallback-target для Xray Reality (если пробинг).
+# - Security headers baked in.
+# =============================================================================
+
+{
+	# Global options
+	email admin@example.com          # ← заменить на реальный
+	auto_https disable_redirects     # HTTPS редиректы управляем вручную
+	servers {
+		protocols h1 h2 h3           # поддержка HTTP/3
+	}
+	# ACME: LE по умолчанию; ZeroSSL как backup
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+	acme_ca_root /etc/caddy/lets-encrypt-r3.pem
+
+	# Лог в JSON для Loki
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 7
+		}
+		format json
+		level  INFO
+	}
+}
+
+# -----------------------------------------------------------------------------
+# HTTP → HTTPS редирект
+# -----------------------------------------------------------------------------
+
+http://fi-01.example.com, http://example.com {
+	redir https://{host}{uri} permanent
+}
+
+# -----------------------------------------------------------------------------
+# Главный фасад на fi-01.example.com:443
+# -----------------------------------------------------------------------------
+# ВАЖНО: Caddy слушает :443 только пока Reality fallback активен.
+# В production config Xray указывает dest на localhost:8443 где реально Caddy.
+
+https://fi-01.example.com {
+	root * /var/www/finnish-cloud-services
+	file_server
+
+	encode zstd gzip
+
+	# Security headers (A+ на SSLLabs / SecurityHeaders)
+	header {
+		# HSTS — 1 год, preload-ready
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		# CSP — строгая для статического лендинга
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# Misc
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		# Скрываем Server banner
+		-Server
+	}
+
+	# robots.txt: разрешаем индексацию (это фасад, хотим быть в Google для domain warming)
+	handle /robots.txt {
+		respond "User-agent: *
+Allow: /
+Sitemap: https://fi-01.example.com/sitemap.xml" 200
+	}
+
+	# Health-check для внешних мониторингов
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Блок служебных путей (на всякий случай)
+	@hidden {
+		path /.git/* /.env* /wp-admin/* /admin/* /phpmyadmin/*
+	}
+	respond @hidden 404
+
+	log {
+		output file /var/log/caddy/fi-01.access.log {
+			roll_size 100MiB
+			roll_keep 14
+		}
+		format json
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Локальный fallback для Xray Reality (loopback :8443)
+# -----------------------------------------------------------------------------
+# Reality при получении «неправильного» handshake'а проксирует
+# запрос на этот адрес — тут мы отдаём тот же фасад.
+
+https://127.0.0.1:8443 {
+	tls internal
+	root * /var/www/finnish-cloud-services
+	file_server
+	header -Server
+}
+
+# -----------------------------------------------------------------------------
+# Дополнительные ноды (fi-02 если появится)
+# -----------------------------------------------------------------------------
+# Активировать после provisioning'а fi-02:
+#
+# https://fi-02.example.com {
+#     root * /var/www/finnish-cloud-services
+#     file_server
+#     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+# }

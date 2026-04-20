@@ -1,0 +1,40 @@
+---
+- name: restart sshd
+  ansible.builtin.systemd:
+    name: ssh
+    state: restarted
+
+- name: reload nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: reloaded
+
+- name: restart fwknop
+  ansible.builtin.systemd:
+    name: fwknop-server
+    state: restarted
+
+- name: restart caddy
+  community.docker.docker_container:
+    name: caddy
+    restart: true
+
+- name: restart xray
+  community.docker.docker_container:
+    name: xray
+    restart: true
+
+- name: restart adguardhome
+  community.docker.docker_container:
+    name: adguardhome
+    restart: true
+
+- name: restart mtg
+  community.docker.docker_container:
+    name: mtg
+    restart: true
+
+- name: restart fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted

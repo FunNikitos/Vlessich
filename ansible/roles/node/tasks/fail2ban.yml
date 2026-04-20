@@ -1,0 +1,24 @@
+---
+# fail2ban + SSH protection
+
+- name: Configure fail2ban SSH jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/vlessich-ssh.local
+    content: |
+      [sshd]
+      enabled  = true
+      port     = {{ ssh_port_new }}
+      filter   = sshd
+      logpath  = /var/log/auth.log
+      maxretry = 3
+      findtime = 600
+      bantime  = 86400
+      banaction = nftables-multiport
+    mode: "0644"
+  notify: restart fail2ban
+
+- name: Ensure fail2ban is running
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: started
+    enabled: true
