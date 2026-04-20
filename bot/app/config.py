@@ -54,4 +54,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    # ``model_validate({})`` forces env-based load without tripping mypy on
+    # required fields (pydantic-settings reads from env, not kwargs).
+    return Settings.model_validate({})

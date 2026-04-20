@@ -13,6 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from app.handlers._utils import resolve_cb
 from app.services.api_client import ApiClient, ApiError
 from app.texts import (
     ACTIVATE_BAD_CODE,
@@ -33,9 +34,13 @@ class ActivateFSM(StatesGroup):
 
 @router.callback_query(F.data == "activate:start")
 async def activate_start(cb: CallbackQuery, state: FSMContext) -> None:
+    resolved = resolve_cb(cb)
+    if resolved is None:
+        await cb.answer()
+        return
+    _user, message = resolved
     await state.set_state(ActivateFSM.waiting_code)
-    if cb.message:
-        await cb.message.answer(ACTIVATE_PROMPT)  # type: ignore[union-attr]
+    await message.answer(ACTIVATE_PROMPT)
     await cb.answer()
 
 
@@ -65,16 +70,17 @@ async def activate_code(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "trial:start")
 async def trial_start(cb: CallbackQuery) -> None:
-    if cb.from_user is None:
+    resolved = resolve_cb(cb)
+    if resolved is None:
         await cb.answer()
         return
+    user, message = resolved
     try:
         async with ApiClient() as api:
-            res = await api.create_trial(tg_id=cb.from_user.id)
+            res = await api.create_trial(tg_id=user.id)
     except ApiError as exc:
         await cb.answer(exc.user_message, show_alert=True)
         return
     text = TRIAL_CREATED if res.created else TRIAL_ALREADY
-    if cb.message:
-        await cb.message.answer(text.format(expires_at=res.expires_at))  # type: ignore[union-attr]
+    await message.answer(text.format(expires_at=res.expires_at))
     await cb.answer()

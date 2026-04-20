@@ -135,7 +135,14 @@ class ApiClient:
                     raw = await resp.read()
                     if resp.status >= 500:
                         raise aiohttp.ClientConnectionError(f"upstream {resp.status}")
-                    data = orjson.loads(raw) if raw else {}
+                    parsed: Any = orjson.loads(raw) if raw else {}
+                    if not isinstance(parsed, dict):
+                        raise ApiError(
+                            status=resp.status,
+                            code="malformed_response",
+                            user_message="Ошибка. Попробуй позже.",
+                        )
+                    data: dict[str, Any] = parsed
                     if resp.status >= 400:
                         log.warning("api.error", status=resp.status, code=data.get("code"))
                         raise ApiError(
@@ -143,5 +150,5 @@ class ApiClient:
                             code=str(data.get("code", "unknown")),
                             user_message=str(data.get("message", "Ошибка. Попробуй позже.")),
                         )
-                    return data  # type: ignore[no-any-return]
+                    return data
         raise RuntimeError("unreachable")  # pragma: no cover
