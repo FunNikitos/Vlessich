@@ -42,6 +42,7 @@ docker compose -f docker-compose.dev.yml up --build
 curl http://localhost:8000/healthz
 open http://localhost:5173   # webapp
 open http://localhost:5174   # admin
+open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 ```
 
 ## Prod deploy
