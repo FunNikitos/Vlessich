@@ -32,15 +32,10 @@ class ApiError(Exception):
 
 @dataclass(slots=True)
 class Subscription:
-    sub_url: str
+    status: str  # NONE | ACTIVE | TRIAL | EXPIRED | REVOKED
+    plan: str | None
     expires_at: str | None
-    plan: str
-
-
-@dataclass(slots=True)
-class TrialResult:
-    created: bool
-    expires_at: str
+    sub_token: str | None
 
 
 @dataclass(slots=True)
@@ -75,30 +70,50 @@ class ApiClient:
 
     # ----- public ---------------------------------------------------------
 
-    async def activate_code(self, *, tg_id: int, code: str) -> Subscription:
-        data = await self._post("/internal/codes/activate", {"tg_id": tg_id, "code": code})
-        return Subscription(
-            sub_url=data["sub_url"],
-            expires_at=data.get("expires_at"),
-            plan=data["plan"],
-        )
+    async def activate_code(
+        self,
+        *,
+        tg_id: int,
+        code: str,
+        ip_hash: str | None = None,
+        referral_source: str | None = None,
+    ) -> Subscription:
+        body: dict[str, Any] = {"tg_id": tg_id, "code": code}
+        if ip_hash is not None:
+            body["ip_hash"] = ip_hash
+        if referral_source is not None:
+            body["referral_source"] = referral_source
+        data = await self._post("/internal/codes/activate", body)
+        return _parse_subscription(data)
 
-    async def create_trial(self, *, tg_id: int) -> TrialResult:
-        data = await self._post("/internal/trials", {"tg_id": tg_id})
-        return TrialResult(created=bool(data["created"]), expires_at=data["expires_at"])
+    async def create_trial(
+        self,
+        *,
+        tg_id: int,
+        phone_e164: str,
+        ip_hash: str | None = None,
+        referral_source: str | None = None,
+    ) -> Subscription:
+        body: dict[str, Any] = {"tg_id": tg_id, "phone_e164": phone_e164}
+        if ip_hash is not None:
+            body["ip_hash"] = ip_hash
+        if referral_source is not None:
+            body["referral_source"] = referral_source
+        data = await self._post("/internal/trials", body)
+        return _parse_subscription(data)
 
     async def get_subscription(self, *, tg_id: int) -> Subscription:
         data = await self._get(f"/internal/users/{tg_id}/subscription")
-        return Subscription(
-            sub_url=data["sub_url"],
-            expires_at=data.get("expires_at"),
-            plan=data["plan"],
-        )
+        return _parse_subscription(data)
 
-    async def get_mtproto(self, *, tg_id: int) -> MtprotoLink:
-        data = await self._post("/internal/mtproto/issue", {"tg_id": tg_id})
+    async def get_mtproto(self, *, tg_id: int, scope: str = "shared") -> MtprotoLink:
+        data = await self._post(
+            "/internal/mtproto/issue", {"tg_id": tg_id, "scope": scope}
+        )
         return MtprotoLink(
-            tg_deeplink=data["tg_deeplink"], host=data["host"], port=int(data["port"])
+            tg_deeplink=str(data["tg_deeplink"]),
+            host=str(data["host"]),
+            port=int(data["port"]),
         )
 
     # ----- internal -------------------------------------------------------
@@ -152,3 +167,18 @@ class ApiClient:
                         )
                     return data
         raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _parse_subscription(data: dict[str, Any]) -> Subscription:
+    return Subscription(
+        status=str(data.get("status", "NONE")),
+        plan=_opt_str(data.get("plan")),
+        expires_at=_opt_str(data.get("expires_at")),
+        sub_token=_opt_str(data.get("sub_token")),
+    )
+
+
+def _opt_str(v: Any) -> str | None:
+    if v is None:
+        return None
+    return str(v)

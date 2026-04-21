@@ -25,6 +25,8 @@ SHUTDOWN_TIMEOUT: Final = 10.0
 def build_dispatcher(settings: Settings, redis: Redis) -> Dispatcher:
     storage = RedisStorage(redis=redis)
     dp = Dispatcher(storage=storage)
+    # Expose the shared Redis client to handlers via dependency injection.
+    dp["redis"] = redis
     msg_throttle = ThrottlingMiddleware(redis, rate=2, per_seconds=1, prefix="msg")
     cb_throttle = ThrottlingMiddleware(redis, rate=4, per_seconds=1, prefix="cb")
     dp.message.middleware(msg_throttle)

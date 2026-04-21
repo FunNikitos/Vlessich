@@ -1,7 +1,7 @@
 """Activation flow (TZ §5).
 
-FSM stub: waits for activation code, validates against backend, then shows
-subscription. Real validation delegated to API client.
+FSM: prompt for code, validate format locally (alphanumeric, 8–32 chars),
+send to backend with referral_source pulled from Redis deep-link cache.
 """
 from __future__ import annotations
 
@@ -12,20 +12,16 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
+from redis.asyncio import Redis
 
 from app.handlers._utils import resolve_cb
 from app.services.api_client import ApiClient, ApiError
-from app.texts import (
-    ACTIVATE_BAD_CODE,
-    ACTIVATE_OK,
-    ACTIVATE_PROMPT,
-    TRIAL_ALREADY,
-    TRIAL_CREATED,
-)
+from app.services.deeplink import consume_deeplink, drop_deeplink
+from app.texts import ACTIVATE_BAD_CODE, ACTIVATE_OK, ACTIVATE_PROMPT
 
 router = Router(name="activation")
 
-CODE_RE = re.compile(r"^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
+CODE_RE = re.compile(r"^[A-Z0-9-]{4,32}$")
 
 
 class ActivateFSM(StatesGroup):
@@ -51,36 +47,24 @@ async def activate_cmd(message: Message, state: FSMContext) -> None:
 
 
 @router.message(ActivateFSM.waiting_code, F.text)
-async def activate_code(message: Message, state: FSMContext) -> None:
+async def activate_code(message: Message, state: FSMContext, redis: Redis) -> None:
     raw = (message.text or "").strip().upper().replace(" ", "")
     if not CODE_RE.match(raw):
         await message.answer(ACTIVATE_BAD_CODE)
         return
     if message.from_user is None:
         return
+    referral_source = await consume_deeplink(redis, message.from_user.id)
     try:
         async with ApiClient() as api:
-            sub = await api.activate_code(tg_id=message.from_user.id, code=raw)
+            sub = await api.activate_code(
+                tg_id=message.from_user.id,
+                code=raw,
+                referral_source=referral_source,
+            )
     except ApiError as exc:
         await message.answer(f"⚠️ {exc.user_message}")
         return
     await state.clear()
+    await drop_deeplink(redis, message.from_user.id)
     await message.answer(ACTIVATE_OK.format(expires_at=sub.expires_at or "∞"))
-
-
-@router.callback_query(F.data == "trial:start")
-async def trial_start(cb: CallbackQuery) -> None:
-    resolved = resolve_cb(cb)
-    if resolved is None:
-        await cb.answer()
-        return
-    user, message = resolved
-    try:
-        async with ApiClient() as api:
-            res = await api.create_trial(tg_id=user.id)
-    except ApiError as exc:
-        await cb.answer(exc.user_message, show_alert=True)
-        return
-    text = TRIAL_CREATED if res.created else TRIAL_ALREADY
-    await message.answer(text.format(expires_at=res.expires_at))
-    await cb.answer()
