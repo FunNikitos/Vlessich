@@ -63,8 +63,17 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=list)
 
     # Remnawave / VPN backend (TZ §10)
+    remnawave_mode: Literal["mock", "http"] = "mock"
     remnawave_url: str = "http://remnawave:3000"
     remnawave_token: SecretStr | None = None
+
+    # Admin API (Stage 2 T4)
+    admin_jwt_secret: SecretStr = Field(
+        default=SecretStr("dev-admin-jwt-change-me"),
+        description="HS256 secret for admin JWT (separate from internal_secret)",
+    )
+    admin_jwt_ttl_sec: int = Field(default=3600, gt=0)
+    admin_bcrypt_cost: int = Field(default=12, ge=4, le=15)
 
 
 @lru_cache(maxsize=1)
