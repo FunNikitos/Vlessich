@@ -51,6 +51,8 @@ uvicorn app.main:app --reload --port 8000
 | `API_PROBE_BURN_THRESHOLD` | `3` | Fails подряд → `BURNED` |
 | `API_PROBE_RECOVER_THRESHOLD` | `5` | Oks подряд → `HEALTHY` |
 | `API_PROBE_METRICS_PORT` | `9101` | Порт `/metrics` prober |
+| `API_RU_PROXY_URL` | — | Residential RU proxy URL (unset → RU backend отключён). SOCKS5/HTTP, например `socks5://user:pass@host:1080`. |
+| `API_RU_PROBE_TIMEOUT_SEC` | `8` | Таймаут одного HTTP-probe через RU прокси |
 | `API_TURNSTILE_SECRET` | — | Cloudflare Turnstile secret (unset = captcha off, dev) |
 | `API_TURNSTILE_VERIFY_URL` | `https://challenges.cloudflare.com/turnstile/v0/siteverify` | Siteverify endpoint |
 

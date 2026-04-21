@@ -83,12 +83,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(vlessich_probe_total{ok=\"true\"}[5m])) / clamp_min(sum(rate(vlessich_probe_total[5m])), 1)",
-          "legendFormat": "ok ratio",
+          "expr": "sum(rate(vlessich_probe_total{ok=\"true\",source=\"edge\"}[5m])) / clamp_min(sum(rate(vlessich_probe_total{source=\"edge\"}[5m])), 1)",
+          "legendFormat": "ok ratio (edge)",
           "refId": "A"
         }
       ],
-      "title": "Probe success ratio (5m)",
+      "title": "Probe success ratio — edge (5m)",
       "type": "timeseries"
     },
     {
@@ -123,6 +123,23 @@
         }
       ],
       "title": "Subscription events (rate, 5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "RU residential probes are telemetry-only (do not flip BURN). Divergence edge vs ru ≈ regional DPI / blocking.",
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (source) (rate(vlessich_probe_total{ok=\"true\"}[5m])) / clamp_min(sum by (source) (rate(vlessich_probe_total[5m])), 1)",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Probe success ratio — edge vs ru (5m)",
       "type": "timeseries"
     }
   ],

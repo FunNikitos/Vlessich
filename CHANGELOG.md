@@ -7,6 +7,74 @@
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-04-21 — Stage 7: Logs + Alerts + Residential RU Probing
+
+### Added
+- **api/workers/probe_backends.py** (новый): `ProbeResult` dataclass,
+  `TcpProbeBackend` (перенесён из `prober.py`) и
+  `HttpProxyProbeBackend` — GET через residential RU прокси
+  (`httpx.AsyncClient(proxy=…)`). Семантика reachability: любой HTTP
+  ответ (2xx..5xx) = `ok=True`, transport-error = `ok=False`. RU-блок
+  работает на TCP/DNS уровне — статус-код не важен.
+- **api/workers/prober.py**: multi-backend режим. `Prober.__init__`
+  принимает `backends: list[tuple[str, ProbeBackend]]` (минимум один,
+  обязательно `edge`). `run_once` делает `len(nodes) × len(backends)`
+  probes в одном `asyncio.gather` и пишет всё в одной транзакции.
+  `_build_backends(settings)` собирает `[edge]` всегда + `[ru]` если
+  `API_RU_PROXY_URL` задан.
+- **api/models.py**: `NodeHealthProbe.probe_source` (varchar(16),
+  NOT NULL DEFAULT `'edge'`, CHECK ∈ {`edge`,`ru`}) + индекс
+  `ix_node_probes_node_source_probed_at(node_id, probe_source,
+  probed_at)`.
+- **api/alembic/versions/0004_stage7.py**: миграция column + check +
+  index.
+- **api/config**: `ru_proxy_url: str | None`,
+  `ru_probe_timeout_sec: float = 8.0`.
+- **api/workers/prober_metrics.py**: `PROBE_TOTAL` и
+  `PROBE_DURATION_SECONDS` теперь labelled `(ok, source)`.
+- **infra/prometheus/rules/vlessich.yml** (новый): пять alert rules —
+  `NodeBurnSpike`, `ProbeSuccessLow` (only `source="edge"`),
+  `ProberDown`, `ApiP95Latency`, `AdminCaptchaFailSpike`. Severity
+  convention: `critical` / `warning` / `info`.
+- **infra/loki/** (новый): `loki-config.yml` (single-binary, tsdb +
+  filesystem, 7d retention), `promtail-config.yml` (Docker SD, JSON
+  pipeline, label `service`/`level`/`logger`/`env`),
+  `README.md` с deploy-snippet и LogQL примерами.
+- **tests**: `test_probe_backends.py` (TCP против ephemeral asyncio
+  server + httpx MockTransport для RU), `test_prober_multi_backend.py`
+  (Postgres-gated: dual-source rows, RU не зажигает BURN, edge
+  зажигает), `test_alert_rules.py` (yaml schema validation).
+
+### Changed
+- **api/routers/admin/nodes.py**: `GET /admin/nodes/{id}/health`
+  фильтрует `NodeHealthProbe.probe_source == 'edge'` для всех 5
+  агрегатов (recent_rows, total_24h, ok_24h, p50, p95) — старая
+  семантика сохраняется, RU-данные не загрязняют historic uptime.
+- **api/workers/prober.py** state machine реагирует **только** на
+  `source == 'edge'`. RU-результаты сохраняются и метрятся, но
+  `nodes.status` / `last_probe_at` / `set_node_state` обновляются
+  только edge-веткой.
+- **api/tests/test_metrics.py** обновлён под новые labelnames
+  `(ok, source)`.
+- **api/tests/test_prober.py** инициализирует `Prober` с
+  `[("edge", backend)]`.
+
+### Security / privacy
+- RU residential proxy URL хранится в `API_RU_PROXY_URL` (не
+  коммитится). `httpx.AsyncClient(verify=False)` оправдан: проксируем
+  публичный hostname через RU exit, важна reachability а не
+  TLS-валидность.
+- Loki promtail-pipeline не добавляет PII — структурные логи API уже
+  маскируют IP через `sha256(ip + IP_SALT)` (см. `app/logging.py`).
+
+### Migration
+```bash
+alembic upgrade head      # 0004_stage7
+# Optional — enable RU probing:
+export API_RU_PROXY_URL=socks5://user:pass@proxy.example:1080
+docker compose restart prober
+```
+
 ## [0.6.0] — 2026-04-21 — Stage 6: Observability + Admin Captcha
 
 ### Added

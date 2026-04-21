@@ -772,3 +772,118 @@ Datasource — `${DS_PROMETHEUS}` (template var). Локально Grafana не
 - mtg metrics → Stage 8 (нужен сам mtg контейнер).
 
 Решения фиксируем в `docs/decisions/NNN-*.md` (ADR) по мере принятия.
+
+## 18. Logs + Alerts + Dual-Source Probing (Stage 7)
+
+Stage 7 закрывает три параллельные оси наблюдаемости: централизация
+логов (Loki), формальные alert rules для Prometheus, и второй
+`ProbeBackend` через residential RU прокси для региональной
+телеметрии.
+
+### Dual-source probing pipeline
+
+```
+┌──────────────┐
+│ prober tick  │  every probe_interval_sec
+└──────┬───────┘
+       │ SELECT id,hostname FROM nodes WHERE status != 'MAINTENANCE'
+       ▼
+   per-node × per-backend = N × M coros in one asyncio.gather
+       │
+       ├── ("edge", TcpProbeBackend)         always on
+       └── ("ru",   HttpProxyProbeBackend)   iff API_RU_PROXY_URL set
+       │
+       ▼  single transaction
+┌─────────────────────────────────────────────────────────────┐
+│ INSERT node_health_probes (..., probe_source='edge'|'ru')   │
+│ — for source == 'edge' only:                                │
+│     UPDATE nodes SET last_probe_at = now()                  │
+│     run BURN/RECOVER state machine                          │
+│     set_node_state(...) gauge                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Edge-only state machine.** RU residential proxies are unreliable by
+nature (rotating exits, blocked-by-DPI false positives). Letting them
+flip `nodes.status` would page on-call for problems users don't have.
+The `ru` source is therefore *telemetry only*: Prometheus counters
++ NodeHealthProbe rows, but never `BURNED` transitions. Operators
+read the divergence in Grafana — `edge OK, ru FAIL` ≈ regional DPI
+event.
+
+**RU backend reachability semantics.** `HttpProxyProbeBackend` issues
+a single GET via `httpx.AsyncClient(proxy=…, verify=False)`. Any HTTP
+response (2xx..5xx) counts as `ok=True`: in RU the failure mode is
+TCP RST / DNS poisoning, not application errors. Only
+`httpx.HTTPError` (transport-level) is treated as failure. TLS verify
+is intentionally disabled — we proxy raw hostnames, not validated
+origins; reachability is the only signal we want.
+
+### Data model
+
+`node_health_probes.probe_source` (varchar(16), NOT NULL DEFAULT
+`'edge'`, CHECK ∈ `{'edge','ru'}`). Backfill via
+`server_default='edge'`. New index
+`ix_node_probes_node_source_probed_at(node_id, probe_source,
+probed_at)` supports per-source aggregations. Migration:
+`alembic/versions/0004_stage7.py`.
+
+`GET /admin/nodes/{id}/health` filters `probe_source = 'edge'` for all
+five aggregates (last 50 probes, total_24h, ok_24h, p50, p95) so
+historic uptime semantics are preserved.
+
+### Metrics extension
+
+`PROBE_TOTAL` and `PROBE_DURATION_SECONDS` (Stage 6) gain a `source`
+label. Pre-Stage-7 PromQL must be updated to
+`{source="edge"}` to keep apples-to-apples — see Grafana dashboard
+queries in `infra/grafana/dashboards/vlessich.json`.
+
+### Alert rules
+
+`infra/prometheus/rules/vlessich.yml` — five alerts, severity tiered:
+
+| Alert | Severity | Trigger |
+|---|---|---|
+| `NodeBurnSpike`         | warning  | `> 2` BURN transitions in 15m |
+| `ProbeSuccessLow`       | warning  | edge success ratio `< 0.8` for 10m |
+| `ProberDown`            | critical | scrape target down for 5m |
+| `ApiP95Latency`         | warning  | `histogram_quantile(0.95, ...) > 1s` for 5m |
+| `AdminCaptchaFailSpike` | info     | `rate(captcha_fail) > 0.2/s` for 5m |
+
+Alertmanager wiring is deploy-time (out of repo). `ProbeSuccessLow`
+intentionally filters `source="edge"` so noisy RU residential
+backends never page anyone.
+
+### Loki + promtail
+
+`infra/loki/` — single-binary Loki (tsdb + filesystem, 7d retention)
+and promtail Docker SD pipeline. Promtail keeps containers labelled
+`com.docker.compose.project=vlessich*`, parses structlog JSON, and
+promotes `level` / `logger` to Loki labels alongside the docker
+`service` label and the static `external_labels.env`.
+
+Label contract:
+
+- `service` ∈ `{api, reminders, prober, bot}` (compose service).
+- `level`   ∈ `{debug, info, warning, error}`.
+- `logger`  — structlog logger name (e.g. `prober`, `admin.auth`).
+- `env`     — static, `dev` / `staging` / `prod`.
+
+PII discipline unchanged: API hashes IPs via `sha256(ip + IP_SALT)`
+before logging; promtail must not introduce new fields.
+
+### Config
+
+| Setting | Env | Default | Назначение |
+|---|---|---|---|
+| `ru_proxy_url` | `API_RU_PROXY_URL` | unset | Residential RU proxy URL (unset → backend disabled). |
+| `ru_probe_timeout_sec` | `API_RU_PROBE_TIMEOUT_SEC` | 8.0 | Per-probe HTTP timeout via RU proxy. |
+
+### Что НЕ в этом этапе
+
+- Alertmanager / PagerDuty / Slack wiring (deploy-time).
+- Loki в `docker-compose.dev.yml` (локально не нужен).
+- Per-source панели в Grafana дашборде (Stage 8 cleanup).
+- RU result как BURN signal — пока telemetry only (см. rationale выше).
+

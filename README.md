@@ -94,6 +94,15 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 - API `/metrics` + prober `/metrics` (port 9101) — Prometheus.
 - Grafana dashboard: `infra/grafana/dashboards/vlessich.json`
   (import в Grafana UI). Scrape-config см. `infra/grafana/README.md`.
+- Alert rules: `infra/prometheus/rules/vlessich.yml`
+  (NodeBurnSpike / ProbeSuccessLow / ProberDown / ApiP95Latency /
+  AdminCaptchaFailSpike). Alertmanager wiring — deploy-time.
+- Log aggregation: Loki + promtail (`infra/loki/`, single-binary,
+  structlog JSON, labels `service/level/logger/env`). См.
+  `infra/loki/README.md`.
+- Residential RU probing (Stage 7): prober запускает второй backend
+  (`ru`) через `API_RU_PROXY_URL` — telemetry only, не зажигает BURN.
+  `NodeHealthProbe.probe_source ∈ {edge, ru}`.
 - Admin login защищён Cloudflare Turnstile: `API_TURNSTILE_SECRET` на
   бэке + `VITE_TURNSTILE_SITEKEY` на фронте. Unset → dev-mode (off).
 

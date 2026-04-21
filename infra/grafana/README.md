@@ -40,10 +40,16 @@ scrape_configs:
 6. **Subscription events** — `rate(vlessich_subscription_events_total)`
    по label `event`.
 
-## Alert rules (TODO Stage 7)
+## Alert rules (Stage 7)
 
-Candidates:
-- `vlessich_node_burned_total` increased in last 5m → page on-call.
-- Probe success ratio < 0.8 for 10m → warning.
-- `vlessich_admin_login_total{result="captcha_fail"}` > 10/min → suspect
-  bot traffic.
+См. `infra/prometheus/rules/vlessich.yml`. Подключить через
+`prometheus.yml`:
+
+```yaml
+rule_files:
+  - /etc/prometheus/rules/vlessich.yml
+```
+
+Alerts: `NodeBurnSpike`, `ProbeSuccessLow` (only `source="edge"`),
+`ProberDown`, `ApiP95Latency`, `AdminCaptchaFailSpike`.
+Alertmanager wiring — deploy-time, не в этом репо.
