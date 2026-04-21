@@ -82,9 +82,13 @@ export default {
 		const country = request.cf?.country ?? "??";
 
 		const ts = Math.floor(Date.now() / 1000).toString();
-		const sig = await hmacSha256Hex(env.BACKEND_SECRET, `${token}.${ts}`);
+		// Unified HMAC wire-format with bot↔api: METHOD\npath\nts\n + raw_body.
+		// GET has empty body, so we sign METHOD\npath\nts\n with no payload.
+		const backendUrl = new URL(`${env.BACKEND_URL}/${token}`);
+		const sigMessage = `GET\n${backendUrl.pathname}\n${ts}\n`;
+		const sig = await hmacSha256Hex(env.BACKEND_SECRET, sigMessage);
 
-		const backendResp = await fetch(`${env.BACKEND_URL}/${token}`, {
+		const backendResp = await fetch(backendUrl.toString(), {
 			method: "GET",
 			cf: { cacheEverything: false },
 			headers: {

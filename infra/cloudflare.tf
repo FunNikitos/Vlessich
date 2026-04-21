@@ -369,7 +369,7 @@ resource "cloudflare_pages_project" "webapp" {
   production_branch = "main"
 
   build_config {
-    build_command   = "pnpm install --frozen-lockfile && pnpm build"
+    build_command   = "npm ci && npm run build"
     destination_dir = "dist"
     root_dir        = "webapp"
   }
@@ -397,7 +397,7 @@ resource "cloudflare_pages_project" "admin" {
   production_branch = "main"
 
   build_config {
-    build_command   = "pnpm install --frozen-lockfile && pnpm build"
+    build_command   = "npm ci && npm run build"
     destination_dir = "dist"
     root_dir        = "admin"
   }
