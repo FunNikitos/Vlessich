@@ -26,6 +26,11 @@ class ApiCode(StrEnum):
     NO_SHARED_POOL = "no_shared_mtproto_pool"
     INVALID_REQUEST = "invalid_request"
     INTERNAL = "internal_error"
+    BAD_INIT_DATA = "bad_init_data"
+    INIT_DATA_EXPIRED = "init_data_expired"
+    BOT_TOKEN_NOT_CONFIGURED = "bot_token_not_configured"
+    USER_NOT_FOUND = "user_not_found"
+    FORBIDDEN = "forbidden"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:
