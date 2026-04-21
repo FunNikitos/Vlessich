@@ -7,6 +7,56 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-04-21 — Stage 5: Active Probing + IP Rotation
+
+### Added
+- **api/workers**: `prober.py` — фоновый воркер, каждые
+  `probe_interval_sec` (default 60s) открывает TCP-соединение на
+  `hostname:probe_port` (443) с таймаутом `probe_timeout_sec` (5s),
+  пишет строку `node_health_probes` для каждой non-MAINTENANCE ноды и
+  обновляет `nodes.last_probe_at`. Использует `asyncio.gather` — одна
+  зависшая нода не тормозит остальные.
+- **api/workers/prober**: BURN/RECOVER state-machine с in-memory
+  счётчиком consecutive ok/fail per node:
+  - `probe_burn_threshold` (default 3) подряд failures → `nodes.status
+    = 'BURNED'` + `AuditLog(action='node_burned')` с payload
+    `{hostname, consecutive_fails, last_error}`.
+  - `probe_recover_threshold` (default 5) подряд successes → `nodes.
+    status = 'HEALTHY'` + `AuditLog(action='node_recovered')`.
+  - Counter сбрасывается при transition (hysteresis).
+- **api/workers/prober**: `ProbeBackend` Protocol + `TcpProbeBackend`
+  (default, asyncio TCP connect). Дизайн позволяет внешнему RU-прокси
+  бэкенду вклиниться в Stage 6 без изменения воркера.
+- **api**: `POST /admin/nodes/{id}/rotate` (superadmin) —
+  подтверждение внешней ротации IP: сбрасывает `current_ip=null`,
+  переводит в `HEALTHY`, пишет `AuditLog(action='node_rotated')` с
+  `previous_ip` и `previous_status`. 404 для unknown node.
+- **api/config**: новые настройки `probe_interval_sec`,
+  `probe_timeout_sec`, `probe_port`, `probe_burn_threshold`,
+  `probe_recover_threshold` (все env `API_PROBE_*`).
+- **admin**: UI-кнопка «Rotate» в `NodesPage` (только superadmin) →
+  `ConfirmDestructiveModal` с `confirmWord="ROTATE"` → `api.nodes.
+  rotate(id)`. Invalidates `["nodes"]`, `["stats"]`,
+  `["node-health", id]`.
+- **infra**: `docker-compose.dev.yml` — новый сервис `prober` (reuses
+  api image, command `python -m app.workers.prober`).
+- **tests**: `test_prober.py` — integration-тесты (scripted backend):
+  MAINTENANCE skip, burn threshold, recover threshold, intermittent
+  failures не жгут. `test_admin_node_rotate.py` — RBAC (403 support),
+  rotate сбрасывает IP+status, audit payload, 404 unknown.
+
+### Changed
+- **api/routers/admin/nodes**: добавлен блок rotate перед health
+  snapshot handler. Существующие endpoints не изменены.
+- **admin/lib/api**: `api.nodes.rotate(id)` метод.
+
+### Security
+- Rotate — только для `superadmin` (RBAC enforced на backend, UI
+  дополнительно скрывает кнопку).
+- Все BURN/RECOVER события логируются с `actor_type='system'`,
+  `actor_ref='prober'`.
+- Prober TCP-connect не передаёт данных, open→close.
+
 ## [0.4.0] — 2026-04-21 — Stage 4: Admin UI + Node Health Dashboard
 
 ### Added

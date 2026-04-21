@@ -590,5 +590,107 @@ Refetch intervals:
 
 См. `admin/README.md` — полный список компонентов в `admin/src/components/`.
 
+## 16. Active Probing + IP Rotation (Stage 5)
+
+### Pipeline
+
+```
+┌──────────────┐   every probe_interval_sec (default 60s)
+│  prober loop │──────────────────────────────────────────┐
+└──────┬───────┘                                          │
+       │ SELECT id, hostname FROM nodes                   │
+       │ WHERE status != 'MAINTENANCE'                    │
+       ▼                                                  │
+┌────────────────────────┐                                │
+│ asyncio.gather(        │  per-node timeout = probe_     │
+│   ProbeBackend.probe() │  timeout_sec (default 5s)      │
+│ ) → list[ProbeResult]  │                                │
+└──────┬─────────────────┘                                │
+       │                                                  │
+       ▼   single transaction                             │
+┌────────────────────────────────────────────────┐        │
+│ INSERT node_health_probes (ok, latency_ms, …) │        │
+│ UPDATE nodes SET last_probe_at = now()         │        │
+│ IF state transition:                           │        │
+│   UPDATE nodes SET status = …                  │        │
+│   INSERT audit_log (node_burned|node_recovered)│        │
+└────────────────────────────────────────────────┘        │
+                                                          │
+       sleep(probe_interval_sec) ◄───────────────────────┘
+```
+
+### BURN / RECOVER state machine
+
+```
+             probe_burn_threshold fails подряд (default 3)
+       ┌────────────────────────────────────────────────┐
+       │                                                ▼
+  ┌─────────┐                                     ┌──────────┐
+  │ HEALTHY │                                     │  BURNED  │
+  └─────────┘                                     └────┬─────┘
+       ▲                                               │
+       │        probe_recover_threshold oks            │
+       │        подряд (default 5, > burn — hysteresis)│
+       └───────────────────────────────────────────────┘
+
+  MAINTENANCE — ручной статус; prober пропускает ноду,
+                переходы не отслеживаются.
+```
+
+- Counter (`consecutive_fails` / `consecutive_oks`) — **in-memory** в
+  процессе `Prober`, `dict[UUID, _Counters]`. Сброс после transition.
+- Intermittent failures (fails < threshold) не жгут: одна OK сбрасывает
+  `consecutive_fails` в 0.
+- `AuditLog` payload: `{hostname, consecutive_fails/oks, last_error?}`.
+- При рестарте процесса счётчики обнуляются (safe — BURN/RECOVER просто
+  потребуют N новых подряд проб).
+
+### `ProbeBackend` Protocol (extensibility)
+
+```python
+class ProbeBackend(Protocol):
+    async def probe(self, hostname: str, port: int,
+                    timeout: float) -> ProbeResult: ...
+```
+
+MVP: `TcpProbeBackend` — `asyncio.open_connection(host, port)` с
+`asyncio.wait_for(..., timeout)`. Без TLS-handshake, без данных —
+open→close. `OSError` / `TimeoutError` → `ok=False, error=str(...)[:256]`.
+
+Stage 6 hook: второй бэкенд через residential RU-прокси
+(TZ §11.4) — проверка видимости ноды **изнутри РФ**. Prober инжектирует
+backend в `__init__`, остальной код не меняется.
+
+### Config (`api/app/config.py`)
+
+| Setting | Env | Default | Назначение |
+|---|---|---|---|
+| `probe_interval_sec` | `API_PROBE_INTERVAL_SEC` | 60 | Интервал между циклами |
+| `probe_timeout_sec` | `API_PROBE_TIMEOUT_SEC` | 5 | Таймаут одного probe |
+| `probe_port` | `API_PROBE_PORT` | 443 | TCP-порт для connect |
+| `probe_burn_threshold` | `API_PROBE_BURN_THRESHOLD` | 3 | Fails подряд → BURNED |
+| `probe_recover_threshold` | `API_PROBE_RECOVER_THRESHOLD` | 5 | Oks подряд → HEALTHY |
+
+### Manual rotate — `POST /admin/nodes/{id}/rotate`
+
+Ручной endpoint для подтверждения внешней ротации IP (когда админ уже
+поменял A-запись или vps-IP у хостера). Только `superadmin`. Атомарно
+(`SELECT … FOR UPDATE`):
+
+- сбрасывает `current_ip = NULL` (следующий probe зафиксирует новый);
+- выставляет `status = 'HEALTHY'` (снимает BURNED);
+- пишет `AuditLog(action='node_rotated')` с payload
+  `{previous_ip, previous_status}` для форензики.
+
+Реального вызова hoster-API в этом этапе нет — это **подтверждение**
+внешнего действия. Admin UI: danger-кнопка «Rotate» в `NodesPage` →
+`ConfirmDestructiveModal` (`confirmWord="ROTATE"`, warning «Сначала
+смените IP у хостера»).
+
+### Deployment
+
+`docker-compose.dev.yml` сервис `prober`: reuses api image,
+`command: python -m app.workers.prober`. Зависит от `db` и `api`. Логи:
+`docker compose logs prober`.
 
 Решения фиксируем в `docs/decisions/NNN-*.md` (ADR) по мере принятия.

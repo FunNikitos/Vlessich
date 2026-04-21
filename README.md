@@ -45,6 +45,9 @@ open http://localhost:5174   # admin
 open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 # Reminders worker запускается в сервисе `reminders` (api image,
 # CMD `python -m app.workers.reminders`); логи: `docker compose logs reminders`.
+# Active prober — сервис `prober` (api image, `python -m app.workers.prober`);
+# каждые 60s TCP-connect на hostname:443 каждой non-MAINTENANCE ноды,
+# 3 fails подряд → BURNED, 5 oks подряд → HEALTHY (см. ARCHITECTURE §16).
 ```
 
 ## API surface
@@ -62,6 +65,7 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `/admin/{codes,users,subscriptions,audit,nodes}` | JWT + RBAC | Admin API (Stage 2 + Stage 4)   |
 | `POST /admin/subscriptions/{id}/revoke` | JWT support+ | Отзыв подписки                              |
 | `GET  /admin/nodes/{id}/health`   | JWT         | Node health: uptime + p50/p95 + probes          |
+| `POST /admin/nodes/{id}/rotate`   | JWT superadmin | Подтверждение ротации IP (clear IP + HEALTHY) |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (user + sub summary)         |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
 | `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |

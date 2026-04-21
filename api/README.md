@@ -11,6 +11,12 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
+## Workers
+
+- `python -m app.workers.reminders` — напоминания об окончании подписки.
+- `python -m app.workers.prober` — active probing + BURN/RECOVER state
+  machine (см. `docs/ARCHITECTURE.md` §16).
+
 ## Endpoints
 
 | Path                              | Auth        | Назначение                                      |
@@ -21,8 +27,29 @@ uvicorn app.main:app --reload --port 8000
 | `POST /internal/trials`           | HMAC        | Выдача триала                                   |
 | `POST /internal/mtproto/issue`    | HMAC        | Выдача MTProto-секрета                          |
 | `GET  /internal/sub/{token}`      | HMAC        | sub-Worker → backend (edge subscription)        |
-| `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (TODO)                       |
-| `GET  /v1/subscription`           | initData    | Mini-App: моя подписка (TODO)                   |
+| `POST /admin/auth/login`          | —           | Admin JWT login                                 |
+| `GET  /admin/stats`               | JWT         | Dashboard сводка                                |
+| `/admin/{codes,users,subscriptions,audit,nodes}` | JWT + RBAC | Admin CRUD / RO               |
+| `POST /admin/subscriptions/{id}/revoke` | JWT support+ | Отзыв подписки                              |
+| `GET  /admin/nodes/{id}/health`   | JWT         | uptime 24h + p50/p95 latency + last 50 probes   |
+| `POST /admin/nodes/{id}/rotate`   | JWT superadmin | Подтверждение ротации IP (clear IP + HEALTHY) |
+| `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap                              |
+| `GET  /v1/webapp/subscription`    | initData    | Mini-App: подписка + sub-URLs + devices         |
+| `POST /v1/webapp/subscription/toggle` | initData | adblock / smart_routing toggle                  |
+| `POST /v1/webapp/devices/{id}/reset`  | initData | regenerate xray_uuid (RL 5/min)                 |
+
+## Settings (env `API_*`)
+
+| Env | Default | Назначение |
+|---|---|---|
+| `API_INTERNAL_SECRET` | — | HMAC ключ для `/internal/*` |
+| `API_SECRETBOX_KEY` | — | libsodium secretbox для codes/xray_uuid |
+| `API_JWT_SECRET` | — | HS256 admin JWT |
+| `API_PROBE_INTERVAL_SEC` | `60` | Интервал `prober` цикла |
+| `API_PROBE_TIMEOUT_SEC` | `5` | Таймаут одного TCP-probe |
+| `API_PROBE_PORT` | `443` | Порт для probe |
+| `API_PROBE_BURN_THRESHOLD` | `3` | Fails подряд → `BURNED` |
+| `API_PROBE_RECOVER_THRESHOLD` | `5` | Oks подряд → `HEALTHY` |
 
 ## Миграции
 
@@ -35,5 +62,7 @@ alembic upgrade head
 
 - Internal endpoints требуют HMAC-SHA256 подписи (header `x-vlessich-sig`),
   clock skew ≤60s. Ключ `API_INTERNAL_SECRET` общий с ботом и sub-Worker.
-- Xray UUID хранятся зашифрованными (libsodium secretbox, `API_SECRETBOX_KEY`).
-- PII не логируется.
+- Xray UUID и activation-коды хранятся зашифрованными (libsodium
+  secretbox, `API_SECRETBOX_KEY`).
+- Admin JWT TTL = 1h, без refresh-токенов.
+- PII не логируется (IP только как `sha256(ip + IP_SALT)`).
