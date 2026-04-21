@@ -1,8 +1,10 @@
 /** Codes list page: filters, pagination, RBAC revoke. */
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
+  ConfirmDestructiveModal,
+  CreateCodesModal,
   FormField,
   Input,
   PageHeading,
@@ -16,7 +18,7 @@ import type { Column } from "@/components";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebounced } from "@/hooks/useDebounced";
 import { hasRole } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { CodeOut } from "@/lib/types";
 
 const PAGE_LIMIT = 50;
@@ -30,7 +32,25 @@ export function CodesPage() {
   const [plan, setPlan] = useState<string>("");
   const [tag, setTag] = useState<string>("");
   const [page, setPage] = useState(1);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<CodeOut | null>(null);
+  const [revokeErr, setRevokeErr] = useState<string | null>(null);
   const debouncedTag = useDebounced(tag, 400);
+
+  const qc = useQueryClient();
+
+  const revokeMut = useMutation({
+    mutationFn: (id: string) => api.codes.revoke(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["codes"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      setRevokeTarget(null);
+      setRevokeErr(null);
+    },
+    onError: (err) => {
+      setRevokeErr(err instanceof ApiError ? err.message : "Ошибка");
+    },
+  });
 
   const queryKey = useMemo(
     () => ["codes", { status, plan, tag: debouncedTag, page }] as const,
@@ -104,7 +124,15 @@ export function CodesPage() {
       align: "right",
       render: (r) =>
         r.status === "ACTIVE" ? (
-          <PillButton variant="danger" size="sm" disabled>
+          <PillButton
+            variant="danger"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              setRevokeTarget(r);
+              setRevokeErr(null);
+            }}
+          >
             Revoke
           </PillButton>
         ) : null,
@@ -127,7 +155,11 @@ export function CodesPage() {
         title="Codes"
         subtitle={`Всего: ${total}`}
         action={
-          <PillButton variant="primary" disabled={!canWrite}>
+          <PillButton
+            variant="primary"
+            disabled={!canWrite}
+            onClick={() => setCreateOpen(true)}
+          >
             + Create batch
           </PillButton>
         }
@@ -210,6 +242,29 @@ export function CodesPage() {
         total={total}
         limit={PAGE_LIMIT}
         onChange={setPage}
+      />
+
+      <CreateCodesModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+      />
+      <ConfirmDestructiveModal
+        open={revokeTarget !== null}
+        onClose={() => {
+          setRevokeTarget(null);
+          setRevokeErr(null);
+        }}
+        onConfirm={() => {
+          if (revokeTarget) revokeMut.mutate(revokeTarget.id);
+        }}
+        title="Revoke code"
+        body={
+          revokeTarget
+            ? `Код ${revokeTarget.id.slice(0, 8)} будет помечен как REVOKED. Это действие необратимо.`
+            : ""
+        }
+        loading={revokeMut.isPending}
+        error={revokeErr}
       />
     </div>
   );
