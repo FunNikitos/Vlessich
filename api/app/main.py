@@ -15,6 +15,7 @@ from app.db import close_engine, close_redis, init_engine, init_redis
 from app.errors import ApiCode
 from app.logging import log, setup_logging
 from app.routers import codes, health, internal, mtproto, public, subscriptions, trials, users
+from app.routers.admin import auth as admin_auth
 
 
 @asynccontextmanager
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(trials.router)
     app.include_router(mtproto.router)
     app.include_router(users.router)
+    app.include_router(admin_auth.router)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:  # noqa: D401
