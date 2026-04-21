@@ -85,6 +85,8 @@ services:
     volumes:
       - ./api:/app
     command: python -m app.workers.prober
+    ports:
+      - "127.0.0.1:9101:9101"
 
   webapp:
     build:

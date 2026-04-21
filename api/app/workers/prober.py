@@ -26,6 +26,7 @@ from typing import Final, Protocol
 from uuid import UUID
 
 import structlog
+from prometheus_client import start_http_server
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +34,13 @@ from app.config import Settings, get_settings
 from app.db import close_engine, get_sessionmaker, init_engine
 from app.logging import setup_logging
 from app.models import AuditLog, Node, NodeHealthProbe
+from app.workers.prober_metrics import (
+    NODE_BURNED_TOTAL,
+    NODE_RECOVERED_TOTAL,
+    PROBE_DURATION_SECONDS,
+    PROBE_TOTAL,
+    set_node_state,
+)
 
 log = structlog.get_logger("prober")
 
@@ -133,6 +141,14 @@ class Prober:
     async def _apply(
         self, session: AsyncSession, node: Node, result: ProbeResult
     ) -> None:
+        # Metrics: every probe contributes to total + duration histogram.
+        ok_label = "true" if result.ok else "false"
+        PROBE_TOTAL.labels(ok=ok_label).inc()
+        if result.latency_ms is not None:
+            PROBE_DURATION_SECONDS.labels(ok=ok_label).observe(
+                result.latency_ms / 1000.0
+            )
+
         # Record probe row (always, append-only log).
         session.add(
             NodeHealthProbe(
@@ -191,6 +207,7 @@ class Prober:
                 consecutive_fails=counters.fails,
             )
             counters.fails = 0
+            NODE_BURNED_TOTAL.inc()
         elif (
             node.status == "BURNED"
             and counters.oks >= self._settings.probe_recover_threshold
@@ -216,6 +233,10 @@ class Prober:
                 consecutive_oks=counters.oks,
             )
             counters.oks = 0
+            NODE_RECOVERED_TOTAL.inc()
+
+        # Publish current state gauge (one-hot).
+        set_node_state(str(node.id), node.hostname, node.status)
 
 
 async def main() -> None:
@@ -225,6 +246,8 @@ async def main() -> None:
     sm = get_sessionmaker()
     backend = TcpProbeBackend(timeout_sec=settings.probe_timeout_sec)
     prober = Prober(sm, backend, settings)
+    # Expose Prometheus /metrics on a dedicated port (separate from API).
+    start_http_server(settings.probe_metrics_port)
     log.info(
         "prober.start",
         interval_sec=settings.probe_interval_sec,
@@ -232,6 +255,7 @@ async def main() -> None:
         port=settings.probe_port,
         burn_threshold=settings.probe_burn_threshold,
         recover_threshold=settings.probe_recover_threshold,
+        metrics_port=settings.probe_metrics_port,
     )
     try:
         while True:

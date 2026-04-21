@@ -99,6 +99,25 @@ class Settings(BaseSettings):
         gt=0,
         description="Consecutive successes to recover BURNED → HEALTHY",
     )
+    probe_metrics_port: int = Field(
+        default=9101,
+        gt=0,
+        le=65535,
+        description="Port on which prober process exposes Prometheus /metrics",
+    )
+
+    # Admin captcha (Stage 6)
+    turnstile_secret: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Cloudflare Turnstile secret. If unset, captcha is disabled "
+            "and admin login does not require a token (dev mode)."
+        ),
+    )
+    turnstile_verify_url: str = Field(
+        default="https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        description="Cloudflare Turnstile siteverify endpoint.",
+    )
 
 
 @lru_cache(maxsize=1)
