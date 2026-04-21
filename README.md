@@ -58,7 +58,10 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `POST /internal/mtproto/issue`    | HMAC        | Выдача MTProto-секрета                          |
 | `GET  /internal/sub/{token}`      | HMAC        | sub-Worker → backend (inbounds[] payload)       |
 | `POST /admin/auth/login`          | —           | Admin JWT login                                 |
-| `/admin/{codes,users,subscriptions,audit,nodes}` | JWT + RBAC | Admin API (Stage 2)              |
+| `GET  /admin/stats`               | JWT         | Dashboard сводка (users/codes/subs/nodes)       |
+| `/admin/{codes,users,subscriptions,audit,nodes}` | JWT + RBAC | Admin API (Stage 2 + Stage 4)   |
+| `POST /admin/subscriptions/{id}/revoke` | JWT support+ | Отзыв подписки                              |
+| `GET  /admin/nodes/{id}/health`   | JWT         | Node health: uptime + p50/p95 + probes          |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (user + sub summary)         |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
 | `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |

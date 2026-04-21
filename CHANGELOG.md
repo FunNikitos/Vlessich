@@ -7,6 +7,68 @@
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-21 — Stage 4: Admin UI + Node Health Dashboard
+
+### Added
+- **api**: `GET /admin/stats` — агрегированная сводка для dashboard
+  (users/codes/subs/nodes counts + node status buckets:
+  HEALTHY/BURNED/MAINTENANCE/STALE). Доступно всем admin-ролям.
+- **api**: `POST /admin/subscriptions/{id}/revoke` — отзыв подписки
+  (status=`REVOKED`, `expires_at=now()`). Доступно support+. 404 если не
+  найдена, 409 если уже в inactive-состоянии.
+- **api**: `GET /admin/nodes/{id}/health` — health-карта ноды:
+  `uptime_24h_pct`, `latency_p50_ms`, `latency_p95_ms`, последние 50
+  probes (`probed_at`, `ok`, `latency_ms`, `error`).
+- **api/models**: `NodeHealthProbe` (таблица `node_health_probes`, индекс
+  `(node_id, probed_at DESC)`). Alembic `0003_stage4`.
+- **api/errors**: `subscription_not_found`, `already_inactive`,
+  `node_not_found`.
+- **admin**: JWT Bearer auth (sessionStorage `vlessich.admin.jwt`,
+  auto-clear on 401 → redirect `/login`). `AuthProvider`, `useAuth`,
+  `hasRole(actual, required)` с ranks superadmin>support>readonly.
+- **admin**: Spotify-dark design-system — `PillButton` (primary/
+  secondary/ghost/danger × sm/md/lg, loading state), `Card`, `Table<T>`
+  (generic columns, skeleton rows), `Pagination`, `Modal` (portal +
+  backdrop + esc), `Drawer` (side panel), `FormField`, `Input`,
+  `Select`, `Textarea`, `StatusBadge` (auto-tone), `RoleBadge`,
+  `Toggle`, `SkeletonBlock`, `Sparkline` (SVG latency bars).
+- **admin**: typed API client (`lib/api.ts`) с `codes/users/
+  subscriptions/audit/nodes/stats` методами, `ApiError {status, code,
+  message}`, query-builder.
+- **admin/pages**:
+  - `Login` — email+password, `POST /admin/auth/login` → sessionStorage.
+  - `Dashboard` — node health panel (5 tiles + stacked bar) + 6 metric
+    cards, auto-refresh 30s.
+  - `Codes` — фильтры status/plan/tag (debounced), pagination, RBAC
+    revoke (superadmin), batch create modal с one-time plaintext display
+    + "copy all" + warning.
+  - `Users` — фильтр tg_id (debounced), link → `/subscriptions?user_id=…`.
+  - `Subscriptions` — фильтры status/plan/user_id (URL-synced), revoke
+    modal с "type REVOKE" confirmation (support+).
+  - `Audit` — фильтры action/actor_type, expandable JSON payload rows.
+  - `Nodes` — list + create/edit modals (superadmin), health drawer
+    (Sparkline + uptime/p50/p95 + probe log), auto-refresh 15s.
+- **admin**: `ProtectedRoute`, `AppShell` (sidebar nav + user email +
+  RoleBadge + sign out), nested routes.
+- **admin**: vitest + jsdom + @testing-library настройки, tests для
+  auth/api/login (не запускаются в CI до `npm install`).
+
+### Changed
+- **admin**: Полная переработка `admin/` — удалены placeholder-страницы,
+  заменены на production-ready UI по `Design.txt`.
+- **admin/README**: описание JWT-аутентификации и RBAC-матрицы вместо
+  Cloudflare Access.
+- **docs/ARCHITECTURE.md**: §15 Admin UI — стек, auth, RBAC,
+  query-keys, design-system inventory.
+
+### Security
+- JWT в `sessionStorage` (не `localStorage`) — изоляция от XSS-persistence
+  между вкладками и очистка при закрытии браузера.
+- Все destructive-действия (revoke code/subscription) требуют
+  `type-to-confirm` ввода в модалке.
+- RBAC enforced на backend; frontend скрывает кнопки как UX-бонус, не
+  security-boundary.
+
 ## [0.3.0] — 2026-04-21 — Stage 3: Mini-App Spotify-dark + webapp API
 
 ### Added

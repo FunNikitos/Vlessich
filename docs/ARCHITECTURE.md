@@ -511,5 +511,84 @@ Edge sub-Worker конвертирует в нужный формат (Stage 2 T
 
 Builders: `webapp/src/lib/deeplinks.ts`.
 
+## 15. Admin UI ↔ Backend contract (Stage 4)
+
+### Stack
+
+React 18 + Vite + TS + Tailwind + **TanStack Query v5**. Spotify-dark по
+`Design.txt`. Хост: `admin/` (порт dev 5174). В прод — статика за
+Cloudflare Access.
+
+### Auth: JWT Bearer
+
+`POST /admin/auth/login` `{email, password}` → `{access_token, role}`
+(HS256, TTL 1h). Токен хранится в `sessionStorage` под ключом
+`vlessich.admin.jwt`. На любой `401` от backend — клиент чистит токен и
+делает `window.location.assign("/login")`. Никаких refresh-токенов в
+Stage 4 (по locked-решению — пользователь логинится заново раз в час).
+
+### RBAC matrix
+
+| Endpoint | readonly | support | superadmin |
+|---|---|---|---|
+| `GET /admin/stats` | ✓ | ✓ | ✓ |
+| `GET /admin/codes`, `/users`, `/subscriptions`, `/audit`, `/nodes` | ✓ | ✓ | ✓ |
+| `GET /admin/nodes/{id}/health` | ✓ | ✓ | ✓ |
+| `POST /admin/codes`, `DELETE /admin/codes/{id}` | — | ✓ | ✓ |
+| `POST /admin/subscriptions/{id}/revoke` | — | ✓ | ✓ |
+| `POST /admin/nodes`, `PATCH /admin/nodes/{id}` | — | — | ✓ |
+
+Frontend дополнительно скрывает кнопки через `hasRole(actual, required)`
+с ranks `superadmin=3 > support=2 > readonly=1`.
+
+### Endpoints (Stage 4 additions)
+
+| Path | Auth | Notes |
+|---|---|---|
+| `GET /admin/stats` | JWT | Сводка для dashboard (10 counts: users/codes/subs/nodes buckets) |
+| `POST /admin/subscriptions/{id}/revoke` | JWT support+ | `status=REVOKED`, `expires_at=now()` |
+| `GET /admin/nodes/{id}/health` | JWT | `uptime_24h_pct`, `latency_p50/p95_ms`, recent 50 probes |
+
+### Node health pipeline
+
+Таблица `node_health_probes`:
+```
+id          uuid  pk
+node_id     uuid  fk → nodes.id
+probed_at   timestamptz
+ok          bool
+latency_ms  int  null
+error       text null
+INDEX (node_id, probed_at DESC)
+```
+
+Сейчас probes пишутся внешним процессом / Stage 5 active prober. Admin
+UI читает их через `GET /admin/nodes/{id}/health`. Расчёты:
+
+- `uptime_24h_pct` = `100 * count(ok) / count(*)` за последние 24h.
+- `latency_p50_ms`, `latency_p95_ms` — percentile_cont на `latency_ms`
+  где `ok=true`.
+
+### TanStack Query keys (convention)
+
+```
+["stats"]
+["codes", { status, plan, tag, page }]
+["users", { tg_id, page }]
+["subs",  { status, plan, user_id, page }]
+["audit", { action, actor_type, page }]
+["nodes"]
+["node-health", id]
+```
+
+Refetch intervals:
+- `["stats"]` — 30s (Dashboard)
+- `["nodes"]` — 30s (NodesPage)
+- `["node-health", id]` — 15s (NodeHealthDrawer, только пока открыт)
+
+### Design-system inventory
+
+См. `admin/README.md` — полный список компонентов в `admin/src/components/`.
+
 
 Решения фиксируем в `docs/decisions/NNN-*.md` (ADR) по мере принятия.
