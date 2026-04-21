@@ -43,6 +43,8 @@ curl http://localhost:8000/healthz
 open http://localhost:5173   # webapp
 open http://localhost:5174   # admin
 open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
+# Reminders worker запускается в сервисе `reminders` (api image,
+# CMD `python -m app.workers.reminders`); логи: `docker compose logs reminders`.
 ```
 
 ## Prod deploy
