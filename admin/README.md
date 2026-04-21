@@ -34,6 +34,8 @@ npm run dev   # http://localhost:5174
 `.env`:
 ```
 VITE_API_BASE_URL=http://localhost:8000
+# Optional: Cloudflare Turnstile sitekey. Empty = no captcha widget.
+VITE_TURNSTILE_SITEKEY=
 ```
 
 Для прода собрать статику и отдать через nginx / Cloudflare Pages за

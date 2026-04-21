@@ -690,7 +690,85 @@ backend в `__init__`, остальной код не меняется.
 ### Deployment
 
 `docker-compose.dev.yml` сервис `prober`: reuses api image,
-`command: python -m app.workers.prober`. Зависит от `db` и `api`. Логи:
-`docker compose logs prober`.
+`command: python -m app.workers.prober`. Зависит от `db` и `api`.
+Stage 6 добавил expose `127.0.0.1:9101` для Prometheus scrape.
+Логи: `docker compose logs prober`.
+
+## 17. Observability + Admin Captcha (Stage 6)
+
+### Prometheus topology
+
+Два независимых scrape-target'а — разные процессы, разные registries:
+
+```
+api (uvicorn :8000)        →  GET /metrics  (default REGISTRY)
+prober worker (:9101)      →  GET /metrics  (start_http_server, отдельный процесс)
+```
+
+Prometheus scrape config (см. `infra/grafana/README.md`):
+
+```yaml
+- job_name: vlessich-api
+  static_configs: [{ targets: ['api:8000'] }]
+- job_name: vlessich-prober
+  static_configs: [{ targets: ['prober:9101'] }]
+```
+
+### Метрики
+
+| Source | Metric | Type | Labels |
+|---|---|---|---|
+| api | `vlessich_http_request_duration_seconds` | Histogram | `method`, `path_template`, `status` |
+| api | `vlessich_admin_login_total` | Counter | `result` ∈ {success, fail, captcha_fail, rate_limited} |
+| api | `vlessich_subscription_events_total` | Counter | `event` ∈ {issued, revoked, expired_auto} |
+| prober | `vlessich_probe_duration_seconds` | Histogram | `ok` |
+| prober | `vlessich_probe_total` | Counter | `ok` |
+| prober | `vlessich_node_state` | Gauge (one-hot) | `node_id`, `hostname`, `status` |
+| prober | `vlessich_node_burned_total` | Counter | — |
+| prober | `vlessich_node_recovered_total` | Counter | — |
+
+**Cardinality discipline**: `path_template` берётся из
+`request.scope["route"].path` (не raw URL). `node_state` — one-hot per
+(node, status). Никаких raw user-id/IP/email в labels.
+
+### Middleware (API)
+
+`MetricsMiddleware` (Starlette `BaseHTTPMiddleware`) оборачивает
+каждый запрос; `/metrics` исключён из самоучёта. Длительность —
+`time.perf_counter()`. На исключении — `status="500"` + reraise.
+
+### Admin captcha (Cloudflare Turnstile)
+
+```
+admin (React)  ── token ──►  /admin/auth/login ── verify ──► challenges.cloudflare.com/siteverify
+   <Turnstile>                  TurnstileVerifier             {success: true/false}
+   widget (lazy CDN)
+```
+
+- Sitekey (`VITE_TURNSTILE_SITEKEY`) на фронте — публичен.
+- Secret (`API_TURNSTILE_SECRET`) на бэке — обязателен для prod. Если
+  unset → captcha **отключена** (dev). Token игнорируется.
+- Verify reasons: `missing_token`, `siteverify_rejected`,
+  `verify_http_error` → 400 `captcha_failed`.
+- Rate-limit (10/60s per email) — отдельный layer, не заменяется
+  captcha (defense-in-depth).
+- Verifier injectable singleton (`get/set_captcha_verifier`) — тесты
+  через `httpx.MockTransport`, без сети.
+
+### Grafana
+
+`infra/grafana/dashboards/vlessich.json` импортируется через UI
+(Dashboards → Import). 6 panels (HTTP RPS, p95, admin login outcomes,
+probe success ratio, node states table, subscription events).
+Datasource — `${DS_PROMETHEUS}` (template var). Локально Grafana не
+поднимается (избыточно).
+
+### Что НЕ в этом этапе
+
+- Loki / promtail (log aggregation) → Stage 7.
+- Alert rules → Stage 7 (есть кандидаты в README).
+- Residential RU probe backend → Stage 7 (через ProbeBackend Protocol
+  hook из §16).
+- mtg metrics → Stage 8 (нужен сам mtg контейнер).
 
 Решения фиксируем в `docs/decisions/NNN-*.md` (ADR) по мере принятия.

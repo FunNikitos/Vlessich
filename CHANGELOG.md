@@ -7,7 +7,64 @@
 
 ## [Unreleased]
 
-## [0.5.0] — 2026-04-21 — Stage 5: Active Probing + IP Rotation
+## [0.6.0] — 2026-04-21 — Stage 6: Observability + Admin Captcha
+
+### Added
+- **api/metrics.py**: Prometheus instruments для API — 
+  `vlessich_http_request_duration_seconds` (Histogram; labels
+  `method`, `path_template`, `status`), `vlessich_admin_login_total`
+  (Counter; `result`), `vlessich_subscription_events_total` (Counter;
+  `event`).
+- **api/main.py**: `MetricsMiddleware` — оборачивает каждый HTTP
+  request, observ'ит длительность по route template (bounded
+  cardinality), skip `/metrics`. Инкременты:
+  - admin login → `success|fail|rate_limited|captcha_fail`,
+  - revoke → `subscription_events_total{event=revoked}`,
+  - code activate → `issued` (new/replace) + `revoked` (replace).
+- **api/workers/prober_metrics.py**: `vlessich_probe_duration_seconds`
+  (Histogram; `ok`), `vlessich_probe_total` (Counter), one-hot Gauge
+  `vlessich_node_state` через `set_node_state(node, hostname, status)`,
+  `vlessich_node_burned_total`, `vlessich_node_recovered_total`.
+- **api/workers/prober.py**: `start_http_server(probe_metrics_port)`
+  (default 9101) отдельный endpoint `/metrics` для scrape.
+- **api/captcha.py**: `TurnstileVerifier` (httpx) + `CaptchaVerifier`
+  Protocol + module-level singleton (test-seam). При unset
+  `API_TURNSTILE_SECRET` — dev no-op (token ignored).
+- **api**: `POST /admin/auth/login` принимает опциональный
+  `captcha_token`. Если secret set → обязателен, fail → 400
+  `captcha_failed` + метрика. Rate-limit остался.
+- **api/config**: `turnstile_secret`, `turnstile_verify_url`,
+  `probe_metrics_port`.
+- **api/errors**: `ApiCode.CAPTCHA_FAILED`.
+- **admin**: `Turnstile` React-компонент (lazy-loaded CDN script, dark
+  theme). `LoginPage` показывает widget когда `VITE_TURNSTILE_SITEKEY`
+  set, шлёт token в login mutation. `LoginIn` / `useAuth.login` типы
+  расширены.
+- **infra/grafana/**: `dashboards/vlessich.json` (6 panels — HTTP RPS,
+  p95, admin login outcomes, probe success ratio, node states,
+  subscription events) + `README.md` с prometheus scrape config для
+  `api:8000` и `prober:9101`.
+- **infra**: `docker-compose.dev.yml` expose `127.0.0.1:9101` из
+  `prober`.
+- **tests**: `test_metrics.py` (registry exposure + label values +
+  `set_node_state` one-hot), `test_captcha.py`
+  (`httpx.MockTransport` — no network).
+
+### Changed
+- **admin/src/hooks/useAuth**: сигнатура `login` принимает опциональный
+  `captchaToken`.
+- **admin/src/lib/types**: `LoginIn.captcha_token`.
+
+### Security
+- Turnstile verify на backend — единственный authoritative источник.
+  Sitekey на фронте публичен по определению. Secret — **только**
+  через `API_TURNSTILE_SECRET` env.
+- Rate-limit (10/60s per email) оставлен независимо от captcha —
+  defense-in-depth.
+- IP для `remoteip` в siteverify берётся из `request.client.host`;
+  не логируется в PII-форме, попадает только в Cloudflare edge.
+
+
 
 ### Added
 - **api/workers**: `prober.py` — фоновый воркер, каждые

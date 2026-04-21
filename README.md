@@ -48,6 +48,7 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 # Active prober — сервис `prober` (api image, `python -m app.workers.prober`);
 # каждые 60s TCP-connect на hostname:443 каждой non-MAINTENANCE ноды,
 # 3 fails подряд → BURNED, 5 oks подряд → HEALTHY (см. ARCHITECTURE §16).
+# Prober также экспонирует Prometheus metrics на 127.0.0.1:9101/metrics.
 ```
 
 ## API surface
@@ -55,7 +56,7 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | Path                              | Auth        | Назначение                                      |
 |-----------------------------------|-------------|-------------------------------------------------|
 | `GET /healthz`, `GET /readyz`     | —           | k8s/docker probes                               |
-| `GET /metrics`                    | —           | Prometheus                                      |
+| `GET /metrics`                    | —           | Prometheus (http/admin/subscription, §17)       |
 | `POST /internal/codes/activate`   | HMAC (§11A) | Активация кода (из бота)                        |
 | `POST /internal/trials`           | HMAC        | Выдача триала                                   |
 | `POST /internal/mtproto/issue`    | HMAC        | Выдача MTProto-секрета                          |
@@ -87,6 +88,14 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 - **Dark only**: Mini-App и Admin — строго по `Design.txt` (Spotify-dark).
 - **HMAC на internal endpoints**: бот ↔ API и sub-Worker ↔ API подписывают
   запросы `x-vlessich-sig` (SHA-256, clock skew ≤60s).
+
+## Observability
+
+- API `/metrics` + prober `/metrics` (port 9101) — Prometheus.
+- Grafana dashboard: `infra/grafana/dashboards/vlessich.json`
+  (import в Grafana UI). Scrape-config см. `infra/grafana/README.md`.
+- Admin login защищён Cloudflare Turnstile: `API_TURNSTILE_SECRET` на
+  бэке + `VITE_TURNSTILE_SITEKEY` на фронте. Unset → dev-mode (off).
 
 ## CI
 
