@@ -1,14 +1,12 @@
-"""Public Mini-App endpoints (Telegram initData-authenticated).
+"""Public Mini-App endpoints (stub).
 
-Stub: real initData validation against BOT_TOKEN; see TZ §7.
+Real endpoints live in :mod:`app.routers.webapp` (Stage 3) authenticated via
+Telegram ``initData``. This module is kept as a placeholder for future
+unauthenticated public endpoints (e.g. health of webapp API).
 """
 from __future__ import annotations
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/v1", tags=["public"])
+router = APIRouter(prefix="/v1/public", tags=["public"])
 
-
-@router.get("/webapp/bootstrap")
-async def bootstrap() -> dict[str, str]:
-    return {"status": "todo"}

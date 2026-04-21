@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.db import close_engine, close_redis, init_engine, init_redis
 from app.errors import ApiCode
 from app.logging import log, setup_logging
-from app.routers import codes, health, internal, mtproto, public, subscriptions, trials, users
+from app.routers import codes, health, internal, mtproto, public, subscriptions, trials, users, webapp
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import codes as admin_codes
 from app.routers.admin import nodes as admin_nodes
@@ -68,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_views.subs_router)
     app.include_router(admin_views.audit_router)
     app.include_router(admin_nodes.router)
+    app.include_router(webapp.router)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:  # noqa: D401

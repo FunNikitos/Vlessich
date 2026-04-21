@@ -74,3 +74,59 @@ class MtprotoOut(BaseModel):
     tg_deeplink: str
     host: str
     port: int
+
+
+# ---------------------------------------------------------------------------
+# Mini-App webapp endpoints (Stage 3)
+# ---------------------------------------------------------------------------
+class WebappUserOut(BaseModel):
+    tg_id: int
+    username: str | None = None
+    first_name: str | None = None
+
+
+class WebappSubscriptionSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    plan: str
+    status: str
+    expires_at: datetime | None
+    adblock: bool
+    smart_routing: bool
+
+
+class WebappBootstrapOut(BaseModel):
+    user: WebappUserOut
+    subscription: WebappSubscriptionSummary | None = None
+
+
+class WebappDeviceOut(BaseModel):
+    id: str
+    name: str | None
+    last_seen: datetime | None
+    ip_hash_short: str | None  # first 12 chars only — for display
+
+
+class WebappSubscriptionOut(BaseModel):
+    id: str
+    plan: str
+    status: str
+    expires_at: datetime | None
+    sub_token: str
+    urls: dict[str, str]
+    devices: list[WebappDeviceOut]
+    devices_limit: int
+    adblock: bool
+    smart_routing: bool
+
+
+class WebappToggleIn(BaseModel):
+    adblock: bool | None = None
+    smart_routing: bool | None = None
+
+
+class WebappDeviceResetOut(BaseModel):
+    device_id: str
+    new_uuid_suffix: str  # last 4 chars only
+
