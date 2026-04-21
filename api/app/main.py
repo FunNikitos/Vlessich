@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -12,6 +12,7 @@ from starlette.responses import Response
 
 from app.config import get_settings
 from app.db import close_engine, init_engine
+from app.errors import ApiCode
 from app.logging import log, setup_logging
 from app.routers import codes, health, internal, mtproto, public, subscriptions, trials
 
@@ -58,6 +59,17 @@ def create_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:  # noqa: D401
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    @app.exception_handler(HTTPException)
+    async def _http_exc_handler(_: Request, exc: HTTPException) -> ORJSONResponse:
+        """Flatten ``detail={"code","message"}`` to top-level for bot parsing."""
+        detail = exc.detail
+        if isinstance(detail, dict) and "code" in detail and "message" in detail:
+            return ORJSONResponse(status_code=exc.status_code, content=detail)
+        return ORJSONResponse(
+            status_code=exc.status_code,
+            content={"code": ApiCode.INTERNAL, "message": str(detail)},
+        )
 
     return app
 

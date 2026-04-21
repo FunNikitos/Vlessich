@@ -1,0 +1,36 @@
+"""Centralized API error envelope.
+
+All ``HTTPException`` raised inside Vlessich API must use ``api_error`` so the
+response body has a stable shape::
+
+    {"code": "rate_limited", "message": "слишком много попыток"}
+
+Bot's ``ApiClient`` parses ``code`` for branching and ``message`` for the user.
+"""
+from __future__ import annotations
+
+from enum import StrEnum
+
+from fastapi import HTTPException
+
+
+class ApiCode(StrEnum):
+    BAD_SIG = "bad_signature"
+    RATE_LIMITED = "rate_limited"
+    CODE_NOT_FOUND = "code_not_found"
+    CODE_USED = "code_used"
+    CODE_EXPIRED = "code_expired"
+    CODE_RESERVED = "code_reserved"
+    TRIAL_ALREADY_USED = "trial_already_used"
+    NO_SUBSCRIPTION = "no_active_subscription"
+    NO_SHARED_POOL = "no_shared_mtproto_pool"
+    INVALID_REQUEST = "invalid_request"
+    INTERNAL = "internal_error"
+
+
+def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:
+    """Build an ``HTTPException`` with the canonical ``{code, message}`` body."""
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": str(code), "message": message},
+    )

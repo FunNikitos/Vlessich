@@ -1,4 +1,13 @@
-"""HMAC signature verification for internal endpoints (bot + sub-Worker)."""
+"""HMAC signature verification for internal endpoints (bot + sub-Worker).
+
+Wire format (matches ``bot/app/services/api_client.py::ApiClient._sign``):
+
+    msg = f"{METHOD}\\n{path}\\n{ts}\\n".encode() + raw_body
+    sig = hmac.sha256(secret, msg).hexdigest()
+    headers: x-vlessich-ts, x-vlessich-sig
+
+Clock skew tolerance: ``MAX_CLOCK_SKEW_SEC``.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -8,8 +17,14 @@ import time
 from fastapi import Header, HTTPException, Request, status
 
 from app.config import get_settings
+from app.errors import ApiCode, api_error
 
 MAX_CLOCK_SKEW_SEC = 60
+
+
+def _compute_signature(secret: bytes, method: str, path: str, ts: int, body: bytes) -> str:
+    msg = f"{method.upper()}\n{path}\n{ts}\n".encode() + body
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()
 
 
 async def verify_internal_signature(
@@ -20,16 +35,16 @@ async def verify_internal_signature(
     try:
         ts = int(x_vlessich_ts)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad ts") from exc
+        raise api_error(status.HTTP_401_UNAUTHORIZED, ApiCode.BAD_SIG, "bad timestamp") from exc
     if abs(time.time() - ts) > MAX_CLOCK_SKEW_SEC:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="stale ts")
+        raise api_error(status.HTTP_401_UNAUTHORIZED, ApiCode.BAD_SIG, "stale timestamp")
 
     body = await request.body()
-    method = request.method.upper()
-    path = request.url.path
     secret = get_settings().internal_secret.get_secret_value().encode()
-    expected = hmac.new(
-        secret, f"{method}\n{path}\n{ts}\n".encode() + body, hashlib.sha256
-    ).hexdigest()
+    expected = _compute_signature(secret, request.method, request.url.path, ts, body)
     if not hmac.compare_digest(expected, x_vlessich_sig):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad signature")
+        raise api_error(status.HTTP_401_UNAUTHORIZED, ApiCode.BAD_SIG, "bad signature")
+
+
+# Keep import-time alias for compatibility with HTTPException-based callers.
+__all__ = ["MAX_CLOCK_SKEW_SEC", "verify_internal_signature", "_compute_signature", "HTTPException"]
