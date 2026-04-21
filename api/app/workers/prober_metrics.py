@@ -13,14 +13,14 @@ from prometheus_client import Counter, Gauge, Histogram
 
 PROBE_DURATION_SECONDS: Final = Histogram(
     "vlessich_probe_duration_seconds",
-    "Per-node probe duration (seconds), labelled by outcome.",
-    labelnames=("ok",),
+    "Per-node probe duration (seconds), labelled by outcome and source.",
+    labelnames=("ok", "source"),
 )
 
 PROBE_TOTAL: Final = Counter(
     "vlessich_probe_total",
-    "Total probes executed, labelled by outcome.",
-    labelnames=("ok",),
+    "Total probes executed, labelled by outcome and source.",
+    labelnames=("ok", "source"),
 )
 
 # One-hot Gauge: for each (node_id, hostname) we set the row matching

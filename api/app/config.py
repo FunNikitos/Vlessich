@@ -106,6 +106,20 @@ class Settings(BaseSettings):
         description="Port on which prober process exposes Prometheus /metrics",
     )
 
+    # Stage 7: second probe backend via residential RU proxy. Unset =
+    # edge-only prober (default behaviour). Format:
+    #   socks5://user:pass@host:port  (recommended)
+    #   http://user:pass@host:port
+    ru_proxy_url: str | None = Field(
+        default=None,
+        description="Residential RU proxy URL (enables 'ru' probe backend).",
+    )
+    ru_probe_timeout_sec: float = Field(
+        default=8.0,
+        gt=0,
+        description="Per-node HTTP probe timeout via RU proxy (seconds).",
+    )
+
     # Admin captcha (Stage 6)
     turnstile_secret: SecretStr | None = Field(
         default=None,
