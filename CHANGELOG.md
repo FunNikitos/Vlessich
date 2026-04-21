@@ -7,6 +7,85 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-21 — Stage 3: Mini-App Spotify-dark + webapp API
+
+### Added
+- **api**: `app/auth/telegram.py` — Telegram `initData` HMAC-SHA256
+  verification (TZ §11B). FastAPI dependency `get_init_data` читает
+  `x-telegram-initdata` header, валидирует подпись через
+  `secret_key = HMAC(b"WebAppData", bot_token)`, проверяет `auth_date`
+  ≤ 24h, парсит `user` JSON. Constant-time compare. Unit-тесты покрывают
+  valid / bad hash / expired / malformed / missing user.
+- **api**: `GET /v1/webapp/bootstrap` — возвращает `{user, subscription}`
+  snapshot для главного экрана Mini-App. 404 `user_not_found` если
+  пользователь не создан ботом.
+- **api**: `GET /v1/webapp/subscription` — детали активной подписки
+  (sub_token, urls для 5 клиентов, devices, limits, toggles). Использует
+  `services/sub_urls.py::build_sub_urls` + `settings.sub_worker_base_url`.
+- **api**: `POST /v1/webapp/subscription/toggle` — обновляет
+  `adblock`/`smart_routing`, audit-event `webapp_toggle_routing`. 422
+  если ни одно поле не указано.
+- **api**: `POST /v1/webapp/devices/{id}/reset` — перегенерирует
+  `devices.xray_uuid_enc`, audit `webapp_device_reset`. Rate-limit
+  5/min/user через `sliding_window_check`. 403 при попытке сбросить
+  чужое устройство.
+- **webapp**: Spotify-dark design-system components (`components/`):
+  `PillButton` (primary/secondary/ghost), `Card` (+elevated shadow),
+  `Toggle` (brand-green active), `StatusBadge` (active/trial/expired),
+  `CopyButton`, `QRCodeBlock` (white bg), `SkeletonBlock` (shimmer).
+- **webapp**: SWR config + typed API client (`lib/api.ts`) с
+  `BootstrapResponse`, `SubscriptionResponse`, `ToggleResponse`,
+  `DeviceResetResponse`. `ApiError` с нормализацией `{code, message}`.
+- **webapp**: `lib/initData.ts` — helpers `getInitData()`,
+  `getStartParam()`, `getTelegramUser()` с dev-fallback на URL query.
+- **webapp**: `hooks/useBootstrap.ts`, `hooks/useSubscription.ts` — SWR
+  обёртки с dedupe 15–30s + keepPreviousData.
+- **webapp**: `lib/deeplinks.ts` — builders для v2rayNG, Clash, sing-box,
+  Surge схем импорта subscription URL.
+- **webapp**: Страницы переписаны с placeholder'ов на реальные экраны:
+  - `HomePage` — `StatusBadge`, план + expiry + CTA (подписка / routing /
+    MTProto). Empty state для пользователей без sub.
+  - `SubscriptionPage` — QR code + copy, 4 deeplink-кнопки импорта,
+    список устройств с confirmation reset flow.
+  - `RoutingPage` — два `Toggle` с optimistic SWR mutate + rollback на
+    ошибку.
+- **webapp**: dependencies: `swr ^2.2.5`, `qrcode.react ^3.1.0`.
+- **api/schemas**: `WebappBootstrapOut`, `WebappSubscriptionOut`,
+  `WebappToggleIn`, `WebappDeviceResetOut`, `WebappDeviceOut`.
+- **api/errors**: новые коды `bad_init_data`, `init_data_expired`,
+  `bot_token_not_configured`, `user_not_found`, `forbidden`.
+- **api/config**: `sub_worker_base_url` setting (`API_SUB_WORKER_BASE_URL`).
+
+### Changed
+- **api**: `/v1/webapp/bootstrap` перенесён из `routers/public.py`
+  (был stub) в новый `routers/webapp.py` с реальной auth. `public.py`
+  оставлен как namespace для будущих unauth endpoints.
+- **webapp**: `App.tsx` обёрнут в `SWRConfig` с retry 3x / 2s
+  backoff / revalidateOnFocus.
+
+### Tests
+- `test_telegram_initdata.py` — 9 тестов: happy path, missing/bad hash,
+  expired, bad auth_date, missing user, malformed JSON, optional fields.
+- `test_webapp_bootstrap.py` — 3 теста через `dependency_overrides`.
+- `test_webapp_subscription.py` — 2 теста.
+- `test_webapp_actions.py` — 6 тестов (toggle validation / update /
+  no-sub / reset owner-mismatch / reset ok / rate-limited).
+- `test_sub_urls.py` — 3 теста на builder.
+
+### Security
+- Constant-time HMAC compare через `hmac.compare_digest`.
+- `bot_token` маскируется через `SecretStr`.
+- Reset device возвращает только последние 4 символа нового UUID.
+- Rate-limit reset-device 5/min/user.
+- initData верифицируется на backend; клиент не доверяется.
+
+### Notes
+- Тесты написаны, но не запускались локально (Windows без MSVC для
+  `pynacl`). AST verified на всех новых Python-файлах.
+- TypeScript не компилировался (node не установлен). Code ревьюился на
+  tsc-compliance вручную.
+
+
 ## [0.2.0] — 2026-04-21 — Stage 2: Edge + Remnawave HTTP + Admin API
 
 ### Added

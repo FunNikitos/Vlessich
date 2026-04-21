@@ -467,4 +467,49 @@ PR-ревью запрещены.
 | Q4 | Хранить ли `tg_username` в users (UX vs PII) | Этап 1 (до создания миграции) |
 | Q5 | Public free-tier MTProto (TZ §9A.6) — включаем в MVP? | Этап 4 (после боевой проверки) |
 
+---
+
+## 14. Mini-App ↔ Backend contract (Stage 3)
+
+### Auth: Telegram initData (TZ §11B)
+
+Webapp шлёт в каждом запросе заголовок `x-telegram-initdata: <raw query>`.
+Backend проверяет:
+
+```
+secret_key = HMAC_SHA256(key=b"WebAppData", msg=bot_token)
+expected   = HMAC_SHA256(key=secret_key, msg=data_check_string).hex()
+hmac.compare_digest(expected, fields["hash"])
+assert now - fields["auth_date"] <= 86400
+```
+
+`data_check_string` — поля `k=v`, отсортированные по ключу, через `\n`,
+**без** `hash`. Реализация: `app/auth/telegram.py::verify_init_data`.
+
+### Endpoints
+
+| Path                                      | Auth     | Notes                                 |
+|-------------------------------------------|----------|---------------------------------------|
+| `GET /v1/webapp/bootstrap`                | initData | `{user, subscription|null}`           |
+| `GET /v1/webapp/subscription`             | initData | `{sub_token, urls, devices, flags}`   |
+| `POST /v1/webapp/subscription/toggle`     | initData | `{adblock?, smart_routing?}` — 422 if both null |
+| `POST /v1/webapp/devices/{id}/reset`      | initData | RL 5/min/user; 403 if not owner       |
+
+### Sub-URL format (public, для VPN-клиентов)
+
+`https://<settings.sub_worker_base_url>/<sub_token>?client=<v2ray|clash|singbox|surge|raw>`
+
+Mini-App получает только URL-список — **не проксирует** VPN payload.
+Edge sub-Worker конвертирует в нужный формат (Stage 2 T8).
+
+### Deeplink схемы импорта
+
+- v2rayNG: `v2rayng://install-sub/?url=<enc>&name=Vlessich`
+- Clash: `clash://install-config?url=<enc>&name=Vlessich`
+- sing-box: `sing-box://import-remote-profile?url=<enc>&name=Vlessich`
+- Surge: `surge:///install-config?url=<enc>`
+
+Builders: `webapp/src/lib/deeplinks.ts`.
+
+
 Решения фиксируем в `docs/decisions/NNN-*.md` (ADR) по мере принятия.

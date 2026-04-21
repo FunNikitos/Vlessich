@@ -59,8 +59,10 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `GET  /internal/sub/{token}`      | HMAC        | sub-Worker → backend (inbounds[] payload)       |
 | `POST /admin/auth/login`          | —           | Admin JWT login                                 |
 | `/admin/{codes,users,subscriptions,audit,nodes}` | JWT + RBAC | Admin API (Stage 2)              |
-| `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (TODO)                       |
-| `GET  /v1/subscription`           | initData    | Mini-App: моя подписка (TODO)                   |
+| `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (user + sub summary)         |
+| `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
+| `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |
+| `POST /v1/webapp/devices/{id}/reset`  | initData | Mini-App: regenerate xray_uuid (RL 5/min)       |
 
 ## Prod deploy
 
