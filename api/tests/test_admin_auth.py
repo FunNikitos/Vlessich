@@ -64,7 +64,9 @@ def test_expired_token_rejected() -> None:
     )
     with pytest.raises(Exception) as exc_info:
         decode_token(tok)
-    assert exc_info.value.detail["code"] == ApiCode.BAD_SIG.value  # type: ignore[attr-defined]
+    detail = getattr(exc_info.value, "detail", None)
+    assert isinstance(detail, dict)
+    assert detail["code"] == ApiCode.BAD_SIG.value
 
 
 def test_tampered_token_rejected() -> None:
@@ -72,7 +74,9 @@ def test_tampered_token_rejected() -> None:
     tampered = token[:-4] + "AAAA"
     with pytest.raises(Exception) as exc_info:
         decode_token(tampered)
-    assert exc_info.value.detail["code"] == ApiCode.BAD_SIG.value  # type: ignore[attr-defined]
+    detail = getattr(exc_info.value, "detail", None)
+    assert isinstance(detail, dict)
+    assert detail["code"] == ApiCode.BAD_SIG.value
 
 
 def test_invalid_role_in_token_rejected() -> None:

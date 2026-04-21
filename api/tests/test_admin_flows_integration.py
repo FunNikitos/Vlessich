@@ -17,14 +17,16 @@ import pytest
 if "VLESSICH_INTEGRATION_DB" not in os.environ:
     pytest.skip("integration DB not configured", allow_module_level=True)
 
+from typing import cast
+
 from httpx import ASGITransport, AsyncClient
 
-from app.auth.admin import create_access_token
+from app.auth.admin import Role, create_access_token
 from app.main import app
 
 
 def _bearer(role: str) -> dict[str, str]:
-    token = create_access_token("integ-admin", role)  # type: ignore[arg-type]
+    token = create_access_token("integ-admin", cast(Role, role))
     return {"Authorization": f"Bearer {token}"}
 
 

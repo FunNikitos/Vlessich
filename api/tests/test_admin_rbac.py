@@ -11,11 +11,13 @@ os.environ.setdefault(
     "API_DATABASE_URL", "postgresql+asyncpg://vlessich:vlessich@localhost:5432/vlessich"
 )
 
+from typing import cast
+
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.auth.admin import AdminClaims, create_access_token, require_admin_role
+from app.auth.admin import AdminClaims, Role, create_access_token, require_admin_role
 
 
 def _make_app() -> FastAPI:
@@ -45,7 +47,7 @@ def _make_app() -> FastAPI:
 
 
 def _bearer(role: str) -> dict[str, str]:
-    token = create_access_token("admin-1", role)  # type: ignore[arg-type]
+    token = create_access_token("admin-1", cast(Role, role))
     return {"Authorization": f"Bearer {token}"}
 
 
