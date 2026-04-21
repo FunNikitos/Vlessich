@@ -11,7 +11,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
 from app.config import get_settings
-from app.db import close_engine, init_engine
+from app.db import close_engine, close_redis, init_engine, init_redis
 from app.errors import ApiCode
 from app.logging import log, setup_logging
 from app.routers import codes, health, internal, mtproto, public, subscriptions, trials
@@ -22,11 +22,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     setup_logging(settings.log_level)
     init_engine(settings.database_url)
+    init_redis(settings.redis_url)
     log.info("api.start", env=settings.env)
     try:
         yield
     finally:
         await close_engine()
+        await close_redis()
         log.info("api.stop")
 
 
