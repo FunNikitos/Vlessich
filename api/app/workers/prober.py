@@ -1,28 +1,30 @@
-"""Active node prober (Stage 5).
+"""Active node prober (Stage 5 + Stage 7).
 
 Runs as a separate container (``docker-compose.dev.yml::prober``). Every
-``probe_interval_sec`` seconds it opens a TCP connection to every
-non-MAINTENANCE node on ``probe_port`` with ``probe_timeout_sec``,
-records a ``NodeHealthProbe`` row, updates ``nodes.last_probe_at`` on
-success/failure, and applies BURN / RECOVER state transitions:
+``probe_interval_sec`` seconds it probes each non-MAINTENANCE node
+through every configured backend:
 
-* ``probe_burn_threshold`` consecutive failures → ``status = BURNED`` +
-  ``AuditLog(action="node_burned")``.
-* ``probe_recover_threshold`` consecutive successes after BURNED →
-  ``status = HEALTHY`` + ``AuditLog(action="node_recovered")``.
+* ``edge`` (``TcpProbeBackend``, always on) — control-plane TCP-connect
+  from the prober's own location. Drives the BURN / RECOVER state
+  machine (``probe_burn_threshold`` / ``probe_recover_threshold``).
+* ``ru``  (``HttpProxyProbeBackend``, enabled when ``API_RU_PROXY_URL``
+  is set) — GET through a residential RU proxy. **Telemetry only** —
+  never flips node status. Populates dashboards so operators can spot
+  "edge OK, RU FAIL" = regional DPI / blocking.
 
-MAINTENANCE nodes are skipped (admin owns lifecycle).
+Each probe appends one ``NodeHealthProbe`` row with ``probe_source`` in
+{``edge``, ``ru``}. The admin /admin/nodes/{id}/health endpoint filters
+to ``edge`` to keep historic semantics.
 
-The probe backend is a ``Protocol`` so tests can inject a fake without a
-network. The default backend uses ``asyncio.open_connection``.
+Backends are injected as ``list[tuple[str, ProbeBackend]]`` so tests can
+swap scripted fakes.
 """
 from __future__ import annotations
 
 import asyncio
-import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Protocol
 from uuid import UUID
 
 import structlog
@@ -34,6 +36,11 @@ from app.config import Settings, get_settings
 from app.db import close_engine, get_sessionmaker, init_engine
 from app.logging import setup_logging
 from app.models import AuditLog, Node, NodeHealthProbe
+from app.workers.probe_backends import (
+    HttpProxyProbeBackend,
+    ProbeResult,
+    TcpProbeBackend,
+)
 from app.workers.prober_metrics import (
     NODE_BURNED_TOTAL,
     NODE_RECOVERED_TOTAL,
@@ -44,79 +51,51 @@ from app.workers.prober_metrics import (
 
 log = structlog.get_logger("prober")
 
-_MAX_ERROR_LEN: Final = 256
-
-
-@dataclass(slots=True, frozen=True)
-class ProbeResult:
-    ok: bool
-    latency_ms: int | None
-    error: str | None
+_EDGE: str = "edge"
+_RU: str = "ru"
 
 
 class ProbeBackend(Protocol):
     async def probe(self, hostname: str, port: int) -> ProbeResult: ...
 
 
-class TcpProbeBackend:
-    """TCP-connect probe (default).
-
-    Successful connect within timeout → ``ok=True`` with measured latency.
-    Any exception (timeout, refused, DNS) → ``ok=False`` with the
-    exception's repr (truncated).
-    """
-
-    def __init__(self, timeout_sec: float) -> None:
-        self._timeout = timeout_sec
-
-    async def probe(self, hostname: str, port: int) -> ProbeResult:
-        started = time.monotonic()
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(hostname, port),
-                timeout=self._timeout,
-            )
-        except asyncio.TimeoutError:
-            return ProbeResult(ok=False, latency_ms=None, error="timeout")
-        except OSError as exc:
-            msg = str(exc) or exc.__class__.__name__
-            return ProbeResult(
-                ok=False, latency_ms=None, error=msg[:_MAX_ERROR_LEN]
-            )
-        latency_ms = int((time.monotonic() - started) * 1000)
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except OSError:
-            # Best-effort close; we still recorded a successful connect.
-            pass
-        return ProbeResult(ok=True, latency_ms=latency_ms, error=None)
-
-
 @dataclass(slots=True)
 class _Counters:
-    """In-memory consecutive ok/fail counters per node (reset each tick run)."""
+    """In-memory consecutive ok/fail counters per node (edge-only)."""
 
     fails: int = 0
     oks: int = 0
 
 
 class Prober:
-    """Stateful prober: keeps per-node consecutive counters across ticks."""
+    """Stateful prober: keeps per-node consecutive counters across ticks.
+
+    State transitions driven exclusively by the ``edge`` backend; the
+    ``ru`` backend is recorded and metered but never changes
+    ``nodes.status``.
+    """
 
     def __init__(
         self,
         sessionmaker: async_sessionmaker[AsyncSession],
-        backend: ProbeBackend,
+        backends: list[tuple[str, ProbeBackend]],
         settings: Settings,
     ) -> None:
+        if not backends:
+            raise ValueError("prober requires at least one backend")
+        sources = [src for src, _ in backends]
+        if _EDGE not in sources:
+            raise ValueError("prober requires an 'edge' backend")
+        if len(set(sources)) != len(sources):
+            raise ValueError("duplicate probe source names")
         self._sm = sessionmaker
-        self._backend = backend
+        self._backends = backends
         self._settings = settings
         self._counters: dict[UUID, _Counters] = defaultdict(_Counters)
 
     async def run_once(self) -> int:
-        """One probe pass. Returns number of probes recorded."""
+        """One probe pass. Returns total number of probes recorded
+        (``len(nodes) * len(backends)``)."""
         async with self._sm() as session:
             nodes = (
                 await session.execute(
@@ -127,38 +106,65 @@ class Prober:
         if not nodes:
             return 0
 
-        results = await asyncio.gather(
-            *(self._backend.probe(n.hostname, self._settings.probe_port) for n in nodes),
-            return_exceptions=False,
-        )
+        port = self._settings.probe_port
+        # Build (source, node, coroutine) triples and gather in one shot.
+        tasks: list[tuple[str, Node]] = []
+        coros = []
+        for source, backend in self._backends:
+            for node in nodes:
+                tasks.append((source, node))
+                coros.append(backend.probe(node.hostname, port))
+        results = await asyncio.gather(*coros, return_exceptions=False)
 
+        # Group per-node edge result so state machine + NODE_STATE gauge
+        # run exactly once per node (after edge probe applied).
         async with self._sm() as session:
             async with session.begin():
-                for node, result in zip(nodes, results, strict=True):
-                    await self._apply(session, node, result)
-        return len(nodes)
+                for (source, node), result in zip(tasks, results, strict=True):
+                    await self._apply(session, node, source, result)
+        return len(tasks)
 
     async def _apply(
-        self, session: AsyncSession, node: Node, result: ProbeResult
+        self,
+        session: AsyncSession,
+        node: Node,
+        source: str,
+        result: ProbeResult,
     ) -> None:
-        # Metrics: every probe contributes to total + duration histogram.
+        # Metrics: every probe contributes, labelled by source.
         ok_label = "true" if result.ok else "false"
-        PROBE_TOTAL.labels(ok=ok_label).inc()
+        PROBE_TOTAL.labels(ok=ok_label, source=source).inc()
         if result.latency_ms is not None:
-            PROBE_DURATION_SECONDS.labels(ok=ok_label).observe(
+            PROBE_DURATION_SECONDS.labels(ok=ok_label, source=source).observe(
                 result.latency_ms / 1000.0
             )
 
-        # Record probe row (always, append-only log).
+        # Append-only probe row tagged by source.
         session.add(
             NodeHealthProbe(
                 node_id=node.id,
                 ok=result.ok,
                 latency_ms=result.latency_ms,
                 error=result.error,
+                probe_source=source,
             )
         )
-        # Update last_probe_at on the node row.
+
+        log.info(
+            "prober.probe",
+            node_id=str(node.id),
+            hostname=node.hostname,
+            source=source,
+            ok=result.ok,
+            latency_ms=result.latency_ms,
+            error=result.error,
+        )
+
+        if source != _EDGE:
+            # RU (and any future non-edge) backends are telemetry only.
+            return
+
+        # --- Edge path: updates last_probe_at, counters, state machine ---
         node.last_probe_at = func.now()
 
         counters = self._counters[node.id]
@@ -169,18 +175,6 @@ class Prober:
             counters.fails += 1
             counters.oks = 0
 
-        log.info(
-            "prober.probe",
-            node_id=str(node.id),
-            hostname=node.hostname,
-            ok=result.ok,
-            latency_ms=result.latency_ms,
-            error=result.error,
-            consecutive_fails=counters.fails,
-            consecutive_oks=counters.oks,
-        )
-
-        # State transitions.
         if (
             node.status == "HEALTHY"
             and counters.fails >= self._settings.probe_burn_threshold
@@ -235,8 +229,31 @@ class Prober:
             counters.oks = 0
             NODE_RECOVERED_TOTAL.inc()
 
-        # Publish current state gauge (one-hot).
+        # Publish current state gauge (one-hot) after edge pass.
         set_node_state(str(node.id), node.hostname, node.status)
+
+
+def _build_backends(settings: Settings) -> list[tuple[str, ProbeBackend]]:
+    """Assemble backend list from settings.
+
+    Always includes ``edge``. Appends ``ru`` iff ``ru_proxy_url`` is set.
+    Kept as a module-level helper so tests can build the list without
+    standing up the full ``main()`` wiring.
+    """
+    backends: list[tuple[str, ProbeBackend]] = [
+        (_EDGE, TcpProbeBackend(timeout_sec=settings.probe_timeout_sec)),
+    ]
+    if settings.ru_proxy_url:
+        backends.append(
+            (
+                _RU,
+                HttpProxyProbeBackend(
+                    proxy_url=settings.ru_proxy_url,
+                    timeout_sec=settings.ru_probe_timeout_sec,
+                ),
+            )
+        )
+    return backends
 
 
 async def main() -> None:
@@ -244,8 +261,8 @@ async def main() -> None:
     setup_logging(settings.log_level)
     init_engine(settings.database_url)
     sm = get_sessionmaker()
-    backend = TcpProbeBackend(timeout_sec=settings.probe_timeout_sec)
-    prober = Prober(sm, backend, settings)
+    backends = _build_backends(settings)
+    prober = Prober(sm, backends, settings)
     # Expose Prometheus /metrics on a dedicated port (separate from API).
     start_http_server(settings.probe_metrics_port)
     log.info(
@@ -256,6 +273,7 @@ async def main() -> None:
         burn_threshold=settings.probe_burn_threshold,
         recover_threshold=settings.probe_recover_threshold,
         metrics_port=settings.probe_metrics_port,
+        sources=[src for src, _ in backends],
     )
     try:
         while True:

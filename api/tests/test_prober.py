@@ -33,7 +33,8 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import get_sessionmaker
 from app.models import AuditLog, Node, NodeHealthProbe
-from app.workers.prober import ProbeResult, Prober
+from app.workers.probe_backends import ProbeResult
+from app.workers.prober import Prober
 
 
 @dataclass
@@ -90,7 +91,7 @@ async def test_maintenance_node_is_skipped() -> None:
     host = f"maint-{uuid.uuid4().hex[:8]}.example.com"
     node = await _seed_node(host, "MAINTENANCE")
     backend = _ScriptedBackend.make({host: [ProbeResult(False, None, "boom")]})
-    prober = Prober(get_sessionmaker(), backend, get_settings())
+    prober = Prober(get_sessionmaker(), [("edge", backend)], get_settings())
     written = await prober.run_once()
     assert written == 0
     assert backend.calls[host] == 0
@@ -103,7 +104,7 @@ async def test_burn_after_threshold_failures() -> None:
     host = f"burn-{uuid.uuid4().hex[:8]}.example.com"
     node = await _seed_node(host, "HEALTHY")
     backend = _ScriptedBackend.make({host: [ProbeResult(False, None, "timeout")]})
-    prober = Prober(get_sessionmaker(), backend, settings)
+    prober = Prober(get_sessionmaker(), [("edge", backend)], settings)
     for _ in range(settings.probe_burn_threshold):
         await prober.run_once()
 
@@ -122,7 +123,7 @@ async def test_recover_after_threshold_successes() -> None:
     host = f"rec-{uuid.uuid4().hex[:8]}.example.com"
     node = await _seed_node(host, "BURNED")
     backend = _ScriptedBackend.make({host: [ProbeResult(True, 12, None)]})
-    prober = Prober(get_sessionmaker(), backend, settings)
+    prober = Prober(get_sessionmaker(), [("edge", backend)], settings)
     for _ in range(settings.probe_recover_threshold):
         await prober.run_once()
 
@@ -148,7 +149,7 @@ async def test_intermittent_failures_do_not_burn() -> None:
         ProbeResult(False, None, "x"),
     ]
     backend = _ScriptedBackend.make({host: seq})
-    prober = Prober(get_sessionmaker(), backend, settings)
+    prober = Prober(get_sessionmaker(), [("edge", backend)], settings)
     for _ in range(len(seq)):
         await prober.run_once()
 
