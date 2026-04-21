@@ -58,6 +58,21 @@ services:
     volumes:
       - ./bot:/app
 
+  # Subscription expiry reminders. Reuses the api image; runs in send-only
+  # aiogram.Bot mode (no polling). Requires BOT_TOKEN in the env file.
+  reminders:
+    build: ./api
+    restart: unless-stopped
+    env_file:
+      - ./api/.env.dev
+      - ./bot/.env.dev
+    depends_on:
+      db:    { condition: service_healthy }
+      api:   { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.reminders
+
   webapp:
     build:
       context: ./webapp
