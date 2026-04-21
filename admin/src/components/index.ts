@@ -20,3 +20,4 @@ export { Toggle } from "./Toggle";
 export type { ToggleProps } from "./Toggle";
 export { SkeletonBlock } from "./SkeletonBlock";
 export type { SkeletonBlockProps } from "./SkeletonBlock";
+export { PageHeading } from "./PageHeading";
