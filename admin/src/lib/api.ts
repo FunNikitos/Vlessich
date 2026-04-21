@@ -162,5 +162,8 @@ export const api = {
     health(id: string): Promise<NodeHealthOut> {
       return request<NodeHealthOut>(`/admin/nodes/${id}/health`);
     },
+    rotate(id: string): Promise<NodeOut> {
+      return request<NodeOut>(`/admin/nodes/${id}/rotate`, { method: "POST" });
+    },
   },
 };

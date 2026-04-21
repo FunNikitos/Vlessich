@@ -1,8 +1,9 @@
 /** Nodes list page: create/edit (superadmin), health drawer. */
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
+  ConfirmDestructiveModal,
   CreateNodeModal,
   EditNodeModal,
   NodeHealthDrawer,
@@ -14,7 +15,7 @@ import {
 import type { Column } from "@/components";
 import { useAuth } from "@/hooks/useAuth";
 import { hasRole } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { NodeOut } from "@/lib/types";
 
 export function NodesPage() {
@@ -24,6 +25,26 @@ export function NodesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<NodeOut | null>(null);
   const [healthTarget, setHealthTarget] = useState<NodeOut | null>(null);
+  const [rotateTarget, setRotateTarget] = useState<NodeOut | null>(null);
+  const [rotateErr, setRotateErr] = useState<string | null>(null);
+
+  const qc = useQueryClient();
+
+  const rotateMut = useMutation({
+    mutationFn: (id: string) => api.nodes.rotate(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["nodes"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      if (rotateTarget) {
+        qc.invalidateQueries({ queryKey: ["node-health", rotateTarget.id] });
+      }
+      setRotateTarget(null);
+      setRotateErr(null);
+    },
+    onError: (err) => {
+      setRotateErr(err instanceof ApiError ? err.message : "Ошибка");
+    },
+  });
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["nodes"],
@@ -111,16 +132,29 @@ export function NodesPage() {
             Health
           </PillButton>
           {canWrite && (
-            <PillButton
-              variant="secondary"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditTarget(r);
-              }}
-            >
-              Edit
-            </PillButton>
+            <>
+              <PillButton
+                variant="secondary"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditTarget(r);
+                }}
+              >
+                Edit
+              </PillButton>
+              <PillButton
+                variant="danger"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRotateTarget(r);
+                  setRotateErr(null);
+                }}
+              >
+                Rotate
+              </PillButton>
+            </>
           )}
         </div>
       ),
@@ -168,6 +202,26 @@ export function NodesPage() {
       <NodeHealthDrawer
         node={healthTarget}
         onClose={() => setHealthTarget(null)}
+      />
+      <ConfirmDestructiveModal
+        open={rotateTarget !== null}
+        onClose={() => {
+          setRotateTarget(null);
+          setRotateErr(null);
+        }}
+        onConfirm={() => {
+          if (rotateTarget) rotateMut.mutate(rotateTarget.id);
+        }}
+        title="Rotate node"
+        body={
+          rotateTarget
+            ? `Подтвердите ротацию: ${rotateTarget.hostname} (${rotateTarget.current_ip ?? "—"}). Backend сбросит current_ip и переведёт в HEALTHY. Сначала смените IP у хостера!`
+            : ""
+        }
+        confirmWord="ROTATE"
+        confirmLabel="Rotate"
+        loading={rotateMut.isPending}
+        error={rotateErr}
       />
     </div>
   );

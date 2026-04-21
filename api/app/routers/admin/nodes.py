@@ -168,6 +168,58 @@ async def patch_node(
 
 
 # ---------------------------------------------------------------------------
+# Manual rotation acknowledgement (Stage 5 T4)
+# ---------------------------------------------------------------------------
+@router.post("/{node_id}/rotate", response_model=NodeOut)
+async def rotate_node(
+    node_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    claims: Annotated[AdminClaims, Depends(require_admin_role("superadmin"))],
+) -> NodeOut:
+    """Acknowledge external IP rotation — clear ``current_ip``, set HEALTHY.
+
+    Use after the operator has rotated the upstream IP at the hosting
+    provider. The next prober tick will populate fresh probe data.
+    """
+    async with session.begin():
+        node = await session.scalar(
+            select(Node).where(Node.id == node_id).with_for_update()
+        )
+        if node is None:
+            raise api_error(
+                status.HTTP_404_NOT_FOUND, ApiCode.NODE_NOT_FOUND, "node not found"
+            )
+        previous_ip = node.current_ip
+        previous_status = node.status
+        node.current_ip = None
+        node.status = "HEALTHY"
+        session.add(
+            AuditLog(
+                actor_type="admin",
+                actor_ref=claims.sub,
+                action="node_rotated",
+                target_type="node",
+                target_id=str(node.id),
+                payload={
+                    "hostname": node.hostname,
+                    "previous_ip": previous_ip,
+                    "previous_status": previous_status,
+                },
+            )
+        )
+    return NodeOut(
+        id=node.id,
+        hostname=node.hostname,
+        current_ip=node.current_ip,
+        provider=node.provider,
+        region=node.region,
+        status=node.status,
+        last_probe_at=node.last_probe_at,
+        created_at=node.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Health snapshot (Stage 4 T1)
 # ---------------------------------------------------------------------------
 @router.get("/{node_id}/health", response_model=NodeHealthOut)
