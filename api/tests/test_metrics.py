@@ -61,8 +61,9 @@ def test_subscription_events_label_values() -> None:
 
 def test_probe_total_label_values() -> None:
     for ok in ("true", "false"):
-        PROBE_TOTAL.labels(ok=ok).inc(0)
-        PROBE_DURATION_SECONDS.labels(ok=ok).observe(0.0)
+        for source in ("edge", "ru"):
+            PROBE_TOTAL.labels(ok=ok, source=source).inc(0)
+            PROBE_DURATION_SECONDS.labels(ok=ok, source=source).observe(0.0)
 
 
 def test_set_node_state_is_one_hot() -> None:
