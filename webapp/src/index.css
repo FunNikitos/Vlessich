@@ -10,6 +10,11 @@
 html, body, #root { height: 100%; }
 body { -webkit-font-smoothing: antialiased; }
 
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 /* Spotify-like pill button */
 @layer components {
   .btn-pill {
