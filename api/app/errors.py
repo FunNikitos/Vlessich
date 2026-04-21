@@ -34,6 +34,7 @@ class ApiCode(StrEnum):
     SUBSCRIPTION_NOT_FOUND = "subscription_not_found"
     ALREADY_INACTIVE = "already_inactive"
     NODE_NOT_FOUND = "node_not_found"
+    CAPTCHA_FAILED = "captcha_failed"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:

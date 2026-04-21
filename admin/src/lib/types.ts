@@ -10,6 +10,7 @@ export type ActorType = "system" | "admin" | "user" | "bot";
 export interface LoginIn {
   email: string;
   password: string;
+  captcha_token?: string | null;
 }
 
 export interface LoginOut {

@@ -29,3 +29,4 @@ export { Sparkline } from "./Sparkline";
 export { CreateNodeModal } from "./CreateNodeModal";
 export { EditNodeModal } from "./EditNodeModal";
 export { NodeHealthDrawer } from "./NodeHealthDrawer";
+export { Turnstile } from "./Turnstile";

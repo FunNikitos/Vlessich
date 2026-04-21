@@ -7,7 +7,7 @@ import type { StoredAuth } from "@/lib/auth";
 
 interface AuthContextValue {
   auth: StoredAuth | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, captchaToken?: string | null) => Promise<void>;
   logout: () => void;
 }
 
@@ -35,8 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(id);
   }, [auth]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const out = await api.login({ email, password });
+  const login = useCallback(async (email: string, password: string, captchaToken?: string | null) => {
+    const out = await api.login({ email, password, captcha_token: captchaToken ?? null });
     const claims = decodeJwt(out.access_token);
     const next: StoredAuth = {
       token: out.access_token,

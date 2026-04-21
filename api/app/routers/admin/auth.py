@@ -15,6 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.admin import Role, create_access_token, verify_password
+from app.captcha import get_captcha_verifier
+from app.config import get_settings
 from app.db import get_session
 from app.errors import ApiCode, api_error
 from app.metrics import ADMIN_LOGIN_TOTAL
@@ -25,6 +27,14 @@ from app.ratelimit import sliding_window_check
 class AdminLoginIn(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=256)
+    captcha_token: str | None = Field(
+        default=None,
+        max_length=4096,
+        description=(
+            "Cloudflare Turnstile token. Required when API_TURNSTILE_SECRET "
+            "is set; ignored otherwise (dev mode)."
+        ),
+    )
 
 
 class AdminLoginOut(BaseModel):
@@ -54,6 +64,21 @@ async def admin_login(
             status.HTTP_429_TOO_MANY_REQUESTS,
             ApiCode.RATE_LIMITED,
             "too many login attempts",
+        )
+
+    # Captcha gate (no-op when API_TURNSTILE_SECRET is unset).
+    settings = get_settings()
+    verifier = get_captcha_verifier(settings)
+    captcha = await verifier.verify(
+        body.captcha_token,
+        remote_ip=request.client.host if request.client else None,
+    )
+    if not captcha.ok:
+        ADMIN_LOGIN_TOTAL.labels(result="captcha_fail").inc()
+        raise api_error(
+            status.HTTP_400_BAD_REQUEST,
+            ApiCode.CAPTCHA_FAILED,
+            f"captcha failed: {captcha.reason or 'unknown'}",
         )
 
     admin = (
