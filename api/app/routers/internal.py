@@ -20,6 +20,7 @@ from app.db import get_session
 from app.errors import ApiCode, api_error
 from app.models import Subscription
 from app.security import verify_internal_signature
+from app.services.sub_payload import PayloadError, build_payload
 
 router = APIRouter(
     prefix="/internal/sub",
@@ -57,11 +58,22 @@ async def get_sub(
             status.HTTP_404_NOT_FOUND, ApiCode.NO_SUBSCRIPTION, "subscription expired"
         )
 
+    # Payload composer (T2): load nodes + devices + inbounds[].
+    try:
+        payload = await build_payload(session, sub.id)
+    except PayloadError as exc:
+        raise api_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            ApiCode.INTERNAL,
+            "payload composition failed",
+        ) from exc
+
     return {
         "sub_url_token": token,
         "status": sub.status,
         "plan": sub.plan,
         "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
         "devices_limit": sub.devices_limit,
-        "inbounds": [],
+        "inbounds": payload["inbounds"],
+        "meta": payload["meta"],
     }
