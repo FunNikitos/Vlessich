@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.admin import Role, create_access_token, verify_password
 from app.db import get_session
 from app.errors import ApiCode, api_error
+from app.metrics import ADMIN_LOGIN_TOTAL
 from app.models import AdminLoginAttempt, AdminUser
 from app.ratelimit import sliding_window_check
 
@@ -48,6 +49,7 @@ async def admin_login(
         window_sec=60,
     )
     if not allowed:
+        ADMIN_LOGIN_TOTAL.labels(result="rate_limited").inc()
         raise api_error(
             status.HTTP_429_TOO_MANY_REQUESTS,
             ApiCode.RATE_LIMITED,
@@ -77,6 +79,7 @@ async def admin_login(
             admin.last_login_at = datetime.now(timezone.utc)
 
     if not ok or admin is None:
+        ADMIN_LOGIN_TOTAL.labels(result="fail").inc()
         raise api_error(
             status.HTTP_401_UNAUTHORIZED, ApiCode.BAD_SIG, "invalid credentials"
         )
@@ -90,4 +93,5 @@ async def admin_login(
         )
     role_typed = cast(Role, role_value)
     token = create_access_token(str(admin.id), role_typed)
+    ADMIN_LOGIN_TOTAL.labels(result="success").inc()
     return AdminLoginOut(access_token=token, role=role_typed)

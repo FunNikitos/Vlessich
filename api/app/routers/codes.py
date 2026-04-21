@@ -25,6 +25,7 @@ from app.config import get_settings
 from app.crypto import CipherError, get_cipher
 from app.db import get_redis, get_session
 from app.errors import ApiCode, api_error
+from app.metrics import SUBSCRIPTION_EVENTS_TOTAL
 from app.models import AuditLog, Code, CodeAttempt, Subscription, User
 from app.ratelimit import check_code_rate_limit
 from app.schemas import ActivateCodeIn, SubscriptionOut
@@ -279,6 +280,12 @@ async def activate(
             result="ok",
             ip_hash=payload.ip_hash,
         )
+
+    if audit_action == "subscription_created":
+        SUBSCRIPTION_EVENTS_TOTAL.labels(event="issued").inc()
+    elif audit_action == "subscription_replaced":
+        SUBSCRIPTION_EVENTS_TOTAL.labels(event="issued").inc()
+        SUBSCRIPTION_EVENTS_TOTAL.labels(event="revoked").inc()
 
     return SubscriptionOut(
         status="ACTIVE",

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.admin import AdminClaims, require_admin_role
 from app.db import get_session
 from app.errors import ApiCode, api_error
+from app.metrics import SUBSCRIPTION_EVENTS_TOTAL
 from app.models import AuditLog, Subscription
 from app.routers.admin.views import SubscriptionAdminOut
 
@@ -67,6 +68,7 @@ async def revoke_subscription(
                 },
             )
         )
+    SUBSCRIPTION_EVENTS_TOTAL.labels(event="revoked").inc()
     return SubscriptionAdminOut(
         id=sub.id,
         user_id=sub.user_id,

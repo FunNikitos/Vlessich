@@ -1,6 +1,7 @@
 """FastAPI app factory."""
 from __future__ import annotations
 
+import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -8,12 +9,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 from app.config import get_settings
 from app.db import close_engine, close_redis, init_engine, init_redis
 from app.errors import ApiCode
 from app.logging import log, setup_logging
+from app.metrics import HTTP_REQUEST_DURATION_SECONDS
 from app.routers import codes, health, internal, mtproto, public, subscriptions, trials, users, webapp
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import codes as admin_codes
@@ -21,6 +25,50 @@ from app.routers.admin import nodes as admin_nodes
 from app.routers.admin import stats as admin_stats
 from app.routers.admin import subscriptions as admin_subs
 from app.routers.admin import views as admin_views
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """Records request duration into ``HTTP_REQUEST_DURATION_SECONDS``.
+
+    Uses the matched route template (``request.scope["route"].path``) as
+    a label to keep cardinality bounded. Unmatched requests (404 before
+    routing) are labelled ``__unknown__``.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        super().__init__(app)
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Skip the metrics endpoint itself to avoid feedback loops.
+        if request.url.path == "/metrics":
+            return await call_next(request)
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception:
+            elapsed = time.perf_counter() - started
+            HTTP_REQUEST_DURATION_SECONDS.labels(
+                method=request.method.upper(),
+                path_template=_route_template(request),
+                status="500",
+            ).observe(elapsed)
+            raise
+        elapsed = time.perf_counter() - started
+        HTTP_REQUEST_DURATION_SECONDS.labels(
+            method=request.method.upper(),
+            path_template=_route_template(request),
+            status=str(status_code),
+        ).observe(elapsed)
+        return response
+
+
+def _route_template(request: Request) -> str:
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    if isinstance(path, str) and path:
+        return path
+    return "__unknown__"
 
 
 @asynccontextmanager
@@ -55,6 +103,8 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
             allow_credentials=False,
         )
+
+    app.add_middleware(MetricsMiddleware)
 
     app.include_router(health.router)
     app.include_router(public.router)
