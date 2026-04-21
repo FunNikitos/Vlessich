@@ -1,0 +1,65 @@
+# Loki — single-binary mode (Stage 7)
+#
+# Suitable for staging / single-host prod. For multi-tenant / scale-out
+# switch to microservices mode and external object storage.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+ingester:
+  chunk_idle_period: 5m
+  chunk_target_size: 1572864   # 1.5 MiB
+  max_chunk_age: 1h
+  wal:
+    enabled: true
+    dir: /loki/wal
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: vlessich_
+        period: 24h
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+
+limits_config:
+  retention_period: 168h        # 7 days
+  reject_old_samples: true
+  reject_old_samples_max_age: 24h
+  max_query_series: 5000
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: ""          # wire at deploy time
+
+analytics:
+  reporting_enabled: false

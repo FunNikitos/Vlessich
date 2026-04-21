@@ -1,0 +1,86 @@
+# Vlessich alert rules — Stage 7
+#
+# Load via prometheus.yml:
+#   rule_files:
+#     - /etc/prometheus/rules/vlessich.yml
+#
+# Wire alertmanager separately (deploy-time, not in this repo).
+# Severity convention: critical = page on-call, warning = ticket, info = log only.
+groups:
+  - name: vlessich.nodes
+    interval: 30s
+    rules:
+      - alert: NodeBurnSpike
+        expr: increase(vlessich_node_burned_total[15m]) > 2
+        for: 0m
+        labels:
+          severity: warning
+          service: prober
+        annotations:
+          summary: "More than 2 nodes burned in last 15m"
+          description: |
+            {{ $value }} HEALTHY -> BURNED transitions in the last 15
+            minutes. Check edge probe failures and ISP / DPI status.
+
+      - alert: ProbeSuccessLow
+        expr: |
+          (
+            sum(rate(vlessich_probe_total{ok="true",source="edge"}[10m]))
+            /
+            sum(rate(vlessich_probe_total{source="edge"}[10m]))
+          ) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: prober
+        annotations:
+          summary: "Edge probe success ratio below 80% for 10m"
+          description: |
+            Aggregate edge-probe success ratio is {{ $value | humanizePercentage }}.
+            Either widespread node outage or prober networking issue.
+
+      - alert: ProberDown
+        expr: up{job="vlessich-prober"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: prober
+        annotations:
+          summary: "Prober scrape target down for 5m"
+          description: |
+            Prometheus cannot scrape the prober /metrics endpoint.
+            BURN detection is offline.
+
+  - name: vlessich.api
+    interval: 30s
+    rules:
+      - alert: ApiP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(vlessich_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "API p95 latency > 1s for 5m"
+          description: |
+            p95 latency is {{ $value }}s. Investigate slow queries or
+            upstream Postgres pressure.
+
+  - name: vlessich.admin
+    interval: 30s
+    rules:
+      - alert: AdminCaptchaFailSpike
+        expr: rate(vlessich_admin_login_total{result="captcha_fail"}[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: info
+          service: api
+        annotations:
+          summary: "Captcha failure rate elevated"
+          description: |
+            > 0.2 captcha-fail per second over 5m. Possible bot traffic
+            against /admin/auth/login.
