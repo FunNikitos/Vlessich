@@ -7,6 +7,70 @@
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-21 — Stage 2: Edge + Remnawave HTTP + Admin API
+
+### Added
+- **api**: `GET /internal/sub/{token}` — реальная реализация. Lookup по
+  `subscriptions.sub_url_token` (ACTIVE/TRIAL), проверка expiry,
+  возвращает payload с `inbounds[]` + `meta`. HMAC wire-format
+  унифицирован с bot↔api (`METHOD\npath\nts\n` + raw_body).
+- **api**: `app/services/sub_payload.py` — composer `build_payload()`
+  материализует inbound-список (VLESS+Reality+Vision, VLESS+Reality+XHTTP)
+  из subscription + devices + node с расшифровкой `xray_uuid` через
+  libsodium secretbox.
+- **api**: `HTTPRemnawaveClient` — реальный httpx клиент за тем же
+  `RemnawaveClient` ABC, retry 3x exp-backoff на 5xx/timeout. DI-switch
+  через `settings.remnawave_mode` (`mock|http`). Контрактные тесты
+  (`respx`) на обе реализации.
+- **api**: Admin API skeleton — JWT (HS256) + bcrypt password hashing,
+  RBAC (superadmin/support/readonly):
+  - `POST /admin/auth/login` — rate-limited по email (10/мин) через
+    Redis sliding-window, audit в `admin_login_attempts`.
+  - `GET/POST/DELETE /admin/codes` — list (filter+pagination) / batch
+    create (генерит plaintexts, шифрует `code_enc` + `code_hash`) /
+    revoke (superadmin only).
+  - `GET /admin/users` — list+filter по `tg_id`.
+  - `GET /admin/subscriptions` — list+filter по status/plan/user_id.
+  - `GET /admin/audit` — выборка audit_log.
+  - `GET/POST/PATCH /admin/nodes` — nodes management (superadmin для
+    mutating операций).
+- **api**: `app/auth/admin.py` — `hash_password`, `verify_password`,
+  `create_access_token`, `decode_token`, `require_admin_role(*roles)`
+  dependency factory.
+- **api**: Alembic `0002_admin.py` — `admin_users` (id, email citext
+  unique, password_hash, role, status, last_login_at) +
+  `admin_login_attempts` (email, success, ip_hash, at) с индексом на
+  `(email, at)`.
+- **api**: settings `remnawave_mode`, `admin_jwt_secret`,
+  `admin_jwt_ttl_sec`, `admin_bcrypt_cost`. Dependency добавлены:
+  `bcrypt>=4.2`, `pyjwt>=2.9`, `respx>=0.21` (dev).
+- **infra**: `infra/workers/subscription.js` — HMAC подпись запроса
+  к backend переведена на единый формат (`GET\npath\nts\n`).
+- **infra**: `wrangler.subscription.toml` + `wrangler.doh.toml` для
+  локальной отладки `wrangler dev` / CI `deploy --dry-run`.
+- **tests**: `test_sub_endpoint.py`, `test_sub_payload.py`,
+  `test_remnawave_contract.py` (mock+http via respx),
+  `test_admin_auth.py`, `test_admin_rbac.py`,
+  `test_admin_flows_integration.py` (opt-in, требует
+  `VLESSICH_INTEGRATION_DB`).
+
+### Changed
+- **infra**: `cloudflare.tf` Pages build_command: `pnpm install` →
+  `npm ci && npm run build` для webapp+admin (consistency со Stage 0 T6).
+- **api**: `app/ratelimit.py::sliding_window_check` — generic INCR+EXPIRE
+  для любых per-key rate limit'ов (используется в admin login).
+
+### Notes
+- Stage 2 non-negotiables пройдены: 0 `# type: ignore` / `as any`
+  (проверено AST-aware grep по 68 .py файлам); все admin-endpoint'ы
+  за RBAC dependency и пишут audit_log; JWT secret/remnawave token —
+  `SecretStr`; payload composer не логирует расшифрованные UUID.
+- HTTP Remnawave endpoint-shape отражает обобщённый Remnawave REST API
+  (`POST /api/users`, `PATCH .../extend`, `DELETE .../users/{id}`,
+  `GET .../sub-url`) — patch в один файл при финализации провайдера.
+- Wrangler deploy не выполнялся (нет node локально); integration-тесты
+  сабворкера требуют Redis+Postgres, поэтому skip по default.
+
 ## [0.1.0] — 2026-04-21 — Stage 1: Backend + Bot MVP
 
 ### Added

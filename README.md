@@ -47,6 +47,21 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 # CMD `python -m app.workers.reminders`); логи: `docker compose logs reminders`.
 ```
 
+## API surface
+
+| Path                              | Auth        | Назначение                                      |
+|-----------------------------------|-------------|-------------------------------------------------|
+| `GET /healthz`, `GET /readyz`     | —           | k8s/docker probes                               |
+| `GET /metrics`                    | —           | Prometheus                                      |
+| `POST /internal/codes/activate`   | HMAC (§11A) | Активация кода (из бота)                        |
+| `POST /internal/trials`           | HMAC        | Выдача триала                                   |
+| `POST /internal/mtproto/issue`    | HMAC        | Выдача MTProto-секрета                          |
+| `GET  /internal/sub/{token}`      | HMAC        | sub-Worker → backend (inbounds[] payload)       |
+| `POST /admin/auth/login`          | —           | Admin JWT login                                 |
+| `/admin/{codes,users,subscriptions,audit,nodes}` | JWT + RBAC | Admin API (Stage 2)              |
+| `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (TODO)                       |
+| `GET  /v1/subscription`           | initData    | Mini-App: моя подписка (TODO)                   |
+
 ## Prod deploy
 
 1. `cd infra && sops -d terraform.tfvars.enc > terraform.tfvars && terraform apply` —
