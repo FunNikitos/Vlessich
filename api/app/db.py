@@ -27,7 +27,13 @@ async def close_engine() -> None:
         _engine = None
 
 
+def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    if _sessionmaker is None:
+        raise RuntimeError("DB not initialized (call init_engine on app startup)")
+    return _sessionmaker
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
-    assert _sessionmaker is not None, "DB not initialized"
-    async with _sessionmaker() as session:
+    sm = get_sessionmaker()
+    async with sm() as session:
         yield session

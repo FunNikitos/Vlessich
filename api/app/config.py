@@ -32,6 +32,28 @@ class Settings(BaseSettings):
     secretbox_key: SecretStr = Field(
         ..., description="32-byte hex key for libsodium secretbox (Xray UUID at rest)"
     )
+    fp_salt: SecretStr = Field(
+        default=SecretStr("dev-fp-salt-change-me"),
+        description="Salt for trial fingerprint (sha256(phone+tg_id+salt))",
+    )
+    ip_salt: SecretStr = Field(
+        default=SecretStr("dev-ip-salt-change-me"),
+        description="Salt for client IP hashing in logs/audit",
+    )
+
+    # Trial policy
+    trial_days: int = Field(default=3, gt=0, le=30)
+
+    # Code activation policy
+    code_rl_attempts: int = Field(default=5, gt=0)
+    code_rl_window_sec: int = Field(default=600, gt=0)
+
+    # MTProto
+    mtg_cloak_domains: list[str] = Field(
+        default_factory=lambda: ["www.google.com", "www.cloudflare.com"]
+    )
+    mtg_host: str = "mtp.example.com"
+    mtg_port: int = 443
 
     # Telegram
     bot_token: SecretStr | None = None  # для серверной валидации Mini-App initData
