@@ -37,7 +37,13 @@
   Pagination — pill-кнопки. Все buttons uppercase + letter-spacing 1.4–2px.
 - **Backend additions (T1)**:
   - `GET /admin/stats` → `{users_total, codes_total, codes_unused,
-    subs_active, subs_trial, nodes_active}` (RBAC: any authenticated).
+    subs_active, subs_trial, nodes_total, nodes_healthy, nodes_burned,
+    nodes_maintenance, nodes_stale}` (RBAC: any authenticated).
+    `nodes_stale` = `last_probe_at IS NULL OR now()-last_probe_at > 5min`.
+  - `GET /admin/nodes/{id}/health` → `{node, recent_probes:
+    HealthProbeOut[], uptime_24h_pct, latency_p50_ms, latency_p95_ms}` —
+    последние 50 probe-результатов из `node_health_probes` table
+    (создадим если нет).
   - `POST /admin/subscriptions/{id}/revoke` → переводит в `REVOKED` +
     `audit_log` (RBAC: support+).
 - **QR / deeplink logic** — **не переносим**, это webapp-specific.
@@ -52,7 +58,8 @@ production-ready Spotify-dark UI для управления codes / users /
 subscriptions / audit / nodes c JWT-auth и RBAC.
 
 **Что НЕ делаем в этом этапе:**
-- Node health dashboard / IP rotation UI (Stage 5).
+- IP rotation UI (Stage 5). _Node health dashboard — включён в Stage 4
+  (см. T9, T8)._
 - Captcha / observability (Stage 6).
 - Admin CRUD для users (только read).
 - Bulk операции (bulk revoke и т.п.).
@@ -95,7 +102,7 @@ subscriptions / audit / nodes c JWT-auth и RBAC.
 
 ## 2. Задачи (атомарные)
 
-### T1 — Backend: `GET /admin/stats` + `POST /admin/subscriptions/{id}/revoke`
+### T1 — Backend: `/admin/stats` + subscription revoke + node health endpoint
 
 **Что:**
 - `api/app/routers/admin/views.py`:
@@ -120,12 +127,22 @@ subscriptions / audit / nodes c JWT-auth и RBAC.
     `{actor, subscription_id, user_id, plan, previous_status}`.
   - Response `SubscriptionOut` (новое/существующее DTO).
 - `api/app/errors.py`: код `already_inactive`, `subscription_not_found`.
-- `api/app/schemas.py`: `StatsOut`.
+- `api/app/schemas.py`: `StatsOut`, `NodeHealthOut`, `HealthProbeOut`.
+- **Node health**: миграция Alembic — таблица `node_health_probes`
+  `(id uuid pk, node_id uuid fk, probed_at timestamptz, ok bool,
+   latency_ms int null, error text null)` + index `(node_id, probed_at desc)`.
+  Модель `app.models.NodeHealthProbe`.
+  - `GET /admin/nodes/{node_id}/health` (RBAC `readonly`+):
+    - 404 если node нет.
+    - Last 50 probes order by probed_at desc.
+    - Aggregate: uptime_24h = `count(ok)/count(*) * 100` за last 24h;
+      latency p50/p95 по `ok=true` за last 24h (Postgres
+      `percentile_cont(0.5/0.95) WITHIN GROUP (ORDER BY latency_ms)`).
 - Unit-тесты: happy path, 403 для `readonly` на revoke, 404, 409,
   audit-log написан.
 
-**Commit:** `feat(api): admin stats + subscription revoke`
-**Effort:** 90 мин.
+**Commit:** `feat(api): admin stats + subscription revoke + node health`
+**Effort:** 120 мин.
 
 ---
 
@@ -319,6 +336,10 @@ subscriptions / audit / nodes c JWT-auth и RBAC.
     `last_health_at`, actions (Edit — superadmin).
   - `CreateNodeModal` — form `{hostname, ip, region, status?}`.
   - `EditNodeModal` — patch `{status, ip}`.
+  - **Health drawer**: row click → side drawer с last 50 probe-точками
+    (Sparkline component, простой SVG bar chart latency_ms +
+    зелёный/красный по `ok`), uptime 24h badge, p50/p95 latency.
+    Auto-refresh `refetchInterval: 15_000`.
   - Mutations invalidate `["nodes"]` + `["stats"]`.
 
 **Commit:** `feat(admin): audit + nodes pages with mutations`
@@ -331,12 +352,17 @@ subscriptions / audit / nodes c JWT-auth и RBAC.
 **Что:**
 - `admin/src/pages/Dashboard.tsx`:
   - `useQuery(["stats"], api.stats)`.
+  - **Node health panel** (top section): grid из 1 ряда —
+    `NODES TOTAL` / `HEALTHY` (green) / `BURNED` (red) /
+    `MAINTENANCE` (amber) / `STALE` (gray, no probe >5min).
+    Под цифрами — горизонтальная полоса-распределение (stacked bar
+    100% = total).
   - 6 `Card` metric tiles в grid `lg:grid-cols-3`:
     - `USERS TOTAL` (big number)
     - `SUBS ACTIVE`
     - `SUBS TRIAL`
     - `CODES UNUSED / TOTAL` (`42 / 150`)
-    - `NODES ACTIVE`
+    - `NODES HEALTHY / TOTAL`
     - `LAST LOGIN` — из `auth` (формат `dd.MM HH:mm`) [client-side only]
   - Каждая Card: uppercase label 11px + number 32px font-bold +
     footer hint.
@@ -344,8 +370,8 @@ subscriptions / audit / nodes c JWT-auth и RBAC.
   - Error banner с retry `PillButton`.
 - Auto-refresh `refetchInterval: 30_000`.
 
-**Commit:** `feat(admin): dashboard with stats metrics`
-**Effort:** 60 мин.
+**Commit:** `feat(admin): dashboard with stats + node health panel`
+**Effort:** 90 мин.
 
 ---
 
