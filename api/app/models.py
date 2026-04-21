@@ -88,6 +88,15 @@ class NodeHealthProbe(Base):
     __tablename__ = "node_health_probes"
     __table_args__ = (
         Index("ix_node_probes_node_probed_at", "node_id", "probed_at"),
+        Index(
+            "ix_node_probes_node_source_probed_at",
+            "node_id",
+            "probe_source",
+            "probed_at",
+        ),
+        CheckConstraint(
+            "probe_source IN ('edge','ru')", name="node_probes_source_chk"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -104,6 +113,12 @@ class NodeHealthProbe(Base):
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
+    # Stage 7: which prober backend produced this row.
+    # 'edge' = control-plane TCP probe (default, drives BURN state).
+    # 'ru'   = residential RU proxy probe (telemetry only).
+    probe_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="edge", server_default="edge"
+    )
 
 
 # ---------------------------------------------------------------------------

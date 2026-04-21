@@ -237,7 +237,12 @@ async def node_health(
     recent_rows = (
         await session.execute(
             select(NodeHealthProbe)
-            .where(NodeHealthProbe.node_id == node_id)
+            .where(
+                NodeHealthProbe.node_id == node_id,
+                # Stage 7: keep dashboard semantics edge-only; ru probes
+                # are telemetry, not part of uptime/p95.
+                NodeHealthProbe.probe_source == "edge",
+            )
             .order_by(NodeHealthProbe.probed_at.desc())
             .limit(50)
         )
@@ -260,6 +265,7 @@ async def node_health(
             .where(
                 NodeHealthProbe.node_id == node_id,
                 NodeHealthProbe.probed_at >= cutoff,
+                NodeHealthProbe.probe_source == "edge",
             )
         )
         or 0
@@ -271,6 +277,7 @@ async def node_health(
             .where(
                 NodeHealthProbe.node_id == node_id,
                 NodeHealthProbe.probed_at >= cutoff,
+                NodeHealthProbe.probe_source == "edge",
                 NodeHealthProbe.ok.is_(True),
             )
         )
@@ -288,6 +295,7 @@ async def node_health(
         ).where(
             NodeHealthProbe.node_id == node_id,
             NodeHealthProbe.probed_at >= cutoff,
+            NodeHealthProbe.probe_source == "edge",
             NodeHealthProbe.ok.is_(True),
             NodeHealthProbe.latency_ms.is_not(None),
         )
@@ -300,6 +308,7 @@ async def node_health(
         ).where(
             NodeHealthProbe.node_id == node_id,
             NodeHealthProbe.probed_at >= cutoff,
+            NodeHealthProbe.probe_source == "edge",
             NodeHealthProbe.ok.is_(True),
             NodeHealthProbe.latency_ms.is_not(None),
         )
