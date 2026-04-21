@@ -82,6 +82,31 @@ class Node(Base):
 
 
 # ---------------------------------------------------------------------------
+# Node health probes (Stage 4 T1) — append-only log for dashboard + SLO view
+# ---------------------------------------------------------------------------
+class NodeHealthProbe(Base):
+    __tablename__ = "node_health_probes"
+    __table_args__ = (
+        Index("ix_node_probes_node_probed_at", "node_id", "probed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("nodes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    probed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+# ---------------------------------------------------------------------------
 # Codes (admin-issued, hash-indexed for O(log N) resolution)
 # ---------------------------------------------------------------------------
 class Code(Base):

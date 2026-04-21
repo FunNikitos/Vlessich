@@ -4,19 +4,20 @@ Read open to all roles; create/patch restricted to ``superadmin``.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.admin import AdminClaims, require_admin_role
 from app.db import get_session
 from app.errors import ApiCode, api_error
-from app.models import AuditLog, Node
+from app.models import AuditLog, Node, NodeHealthProbe
+from app.schemas import HealthProbeOut, NodeHealthOut
 
 router = APIRouter(prefix="/admin/nodes", tags=["admin"])
 
@@ -163,4 +164,104 @@ async def patch_node(
         status=node.status,
         last_probe_at=node.last_probe_at,
         created_at=node.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Health snapshot (Stage 4 T1)
+# ---------------------------------------------------------------------------
+@router.get("/{node_id}/health", response_model=NodeHealthOut)
+async def node_health(
+    node_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    _claims: Annotated[AdminClaims, Depends(require_admin_role(*_READ_ROLES))],
+) -> NodeHealthOut:
+    node = await session.scalar(select(Node).where(Node.id == node_id))
+    if node is None:
+        raise api_error(
+            status.HTTP_404_NOT_FOUND, ApiCode.NODE_NOT_FOUND, "node not found"
+        )
+
+    recent_rows = (
+        await session.execute(
+            select(NodeHealthProbe)
+            .where(NodeHealthProbe.node_id == node_id)
+            .order_by(NodeHealthProbe.probed_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    recent = [
+        HealthProbeOut(
+            probed_at=p.probed_at,
+            ok=p.ok,
+            latency_ms=p.latency_ms,
+            error=p.error,
+        )
+        for p in recent_rows
+    ]
+
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    total_24h = (
+        await session.scalar(
+            select(func.count())
+            .select_from(NodeHealthProbe)
+            .where(
+                NodeHealthProbe.node_id == node_id,
+                NodeHealthProbe.probed_at >= cutoff,
+            )
+        )
+        or 0
+    )
+    ok_24h = (
+        await session.scalar(
+            select(func.count())
+            .select_from(NodeHealthProbe)
+            .where(
+                NodeHealthProbe.node_id == node_id,
+                NodeHealthProbe.probed_at >= cutoff,
+                NodeHealthProbe.ok.is_(True),
+            )
+        )
+        or 0
+    )
+    uptime_pct: float | None = None
+    if total_24h > 0:
+        uptime_pct = round(float(ok_24h) / float(total_24h) * 100.0, 2)
+
+    p50 = await session.scalar(
+        select(
+            func.percentile_cont(0.5).within_group(
+                NodeHealthProbe.latency_ms.asc()
+            )
+        ).where(
+            NodeHealthProbe.node_id == node_id,
+            NodeHealthProbe.probed_at >= cutoff,
+            NodeHealthProbe.ok.is_(True),
+            NodeHealthProbe.latency_ms.is_not(None),
+        )
+    )
+    p95 = await session.scalar(
+        select(
+            func.percentile_cont(0.95).within_group(
+                NodeHealthProbe.latency_ms.asc()
+            )
+        ).where(
+            NodeHealthProbe.node_id == node_id,
+            NodeHealthProbe.probed_at >= cutoff,
+            NodeHealthProbe.ok.is_(True),
+            NodeHealthProbe.latency_ms.is_not(None),
+        )
+    )
+
+    return NodeHealthOut(
+        node_id=str(node.id),
+        hostname=node.hostname,
+        status=node.status,
+        current_ip=node.current_ip,
+        region=node.region,
+        last_probe_at=node.last_probe_at,
+        uptime_24h_pct=uptime_pct,
+        latency_p50_ms=float(p50) if p50 is not None else None,
+        latency_p95_ms=float(p95) if p95 is not None else None,
+        recent_probes=recent,
     )

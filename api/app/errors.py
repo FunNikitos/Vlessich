@@ -31,6 +31,9 @@ class ApiCode(StrEnum):
     BOT_TOKEN_NOT_CONFIGURED = "bot_token_not_configured"
     USER_NOT_FOUND = "user_not_found"
     FORBIDDEN = "forbidden"
+    SUBSCRIPTION_NOT_FOUND = "subscription_not_found"
+    ALREADY_INACTIVE = "already_inactive"
+    NODE_NOT_FOUND = "node_not_found"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:

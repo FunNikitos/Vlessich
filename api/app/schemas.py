@@ -130,3 +130,39 @@ class WebappDeviceResetOut(BaseModel):
     device_id: str
     new_uuid_suffix: str  # last 4 chars only
 
+
+# ---------------------------------------------------------------------------
+# Admin stats + node health (Stage 4 T1)
+# ---------------------------------------------------------------------------
+class StatsOut(BaseModel):
+    users_total: int
+    codes_total: int
+    codes_unused: int
+    subs_active: int
+    subs_trial: int
+    nodes_total: int
+    nodes_healthy: int
+    nodes_burned: int
+    nodes_maintenance: int
+    nodes_stale: int
+
+
+class HealthProbeOut(BaseModel):
+    probed_at: datetime
+    ok: bool
+    latency_ms: int | None
+    error: str | None
+
+
+class NodeHealthOut(BaseModel):
+    node_id: str
+    hostname: str
+    status: str
+    current_ip: str | None
+    region: str | None
+    last_probe_at: datetime | None
+    uptime_24h_pct: float | None  # null if no probes in last 24h
+    latency_p50_ms: float | None
+    latency_p95_ms: float | None
+    recent_probes: list[HealthProbeOut]
+
