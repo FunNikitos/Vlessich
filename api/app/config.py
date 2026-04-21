@@ -81,6 +81,25 @@ class Settings(BaseSettings):
     admin_jwt_ttl_sec: int = Field(default=3600, gt=0)
     admin_bcrypt_cost: int = Field(default=12, ge=4, le=15)
 
+    # Active probing (Stage 5)
+    probe_interval_sec: int = Field(
+        default=60, gt=0, description="Seconds between prober ticks"
+    )
+    probe_timeout_sec: float = Field(
+        default=5.0, gt=0, description="Per-node TCP connect timeout (seconds)"
+    )
+    probe_port: int = Field(
+        default=443, gt=0, le=65535, description="TCP port probed on each node"
+    )
+    probe_burn_threshold: int = Field(
+        default=3, gt=0, description="Consecutive failures to mark node BURNED"
+    )
+    probe_recover_threshold: int = Field(
+        default=5,
+        gt=0,
+        description="Consecutive successes to recover BURNED → HEALTHY",
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
