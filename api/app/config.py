@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     remnawave_url: str = "http://remnawave:3000"
     remnawave_token: SecretStr | None = None
 
+    # sub-Worker public base URL (Stage 3, Mini-App webapp endpoint)
+    sub_worker_base_url: str = Field(
+        default="https://sub.example.com",
+        description="Public sub-Worker base URL shown to VPN clients",
+    )
+
     # Admin API (Stage 2 T4)
     admin_jwt_secret: SecretStr = Field(
         default=SecretStr("dev-admin-jwt-change-me"),
