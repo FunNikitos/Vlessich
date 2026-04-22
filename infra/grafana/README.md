@@ -21,6 +21,11 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ['prober:9101']
+
+  - job_name: vlessich-mtg
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['mtg:9410']
 ```
 
 ## Dashboard

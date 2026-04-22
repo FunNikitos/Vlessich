@@ -112,5 +112,25 @@ services:
       - "127.0.0.1:1025:1025"
       - "127.0.0.1:8025:8025"
 
+  # MTProto proxy (Stage 8). In prod runs on a separate VPS (TZ §9A.8);
+  # here we wire it for local end-to-end testing of the bot deeplink
+  # flow. Edit mtg/config.toml first (see mtg/README.md). The /metrics
+  # endpoint is bound to 127.0.0.1:9410 inside the container; we
+  # publish it for Prometheus scrape from the host network.
+  mtg:
+    image: nineseconds/mtg:2
+    restart: unless-stopped
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/config.toml:/config.toml:ro
+    ports:
+      - "8443:8443"
+      - "127.0.0.1:9410:9410"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9410/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 volumes:
   pgdata:

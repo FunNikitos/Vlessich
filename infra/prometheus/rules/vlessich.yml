@@ -84,3 +84,18 @@ groups:
           description: |
             > 0.2 captcha-fail per second over 5m. Possible bot traffic
             against /admin/auth/login.
+
+  - name: vlessich.mtg
+    interval: 30s
+    rules:
+      - alert: MtgDown
+        expr: up{job="vlessich-mtg"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: mtg
+        annotations:
+          summary: "MTProto (mtg) scrape target down for 5m"
+          description: |
+            Prometheus cannot scrape mtg /metrics (127.0.0.1:9410).
+            Telegram users will lose MTProto access until mtg recovers.
