@@ -37,7 +37,7 @@ Ubuntu-VPS. Один скрипт ставит Docker, клонит репози
 Подключаемся к серверу по SSH и запускаем:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/master/scripts/install.sh \
   | sudo BOT_TOKEN=123456:ABC_DEF... bash
 ```
 

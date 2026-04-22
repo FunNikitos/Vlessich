@@ -64,7 +64,7 @@ mtproto workers + ruleset puller) на **одном** Ubuntu-хосте. FI-но
 ### Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/master/scripts/install.sh \
   | sudo BOT_TOKEN=123:abc bash
 ```
 

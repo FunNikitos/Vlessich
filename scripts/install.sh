@@ -3,7 +3,7 @@
 # Target: clean Ubuntu 22.04 / 24.04, single-host all-in-one topology.
 #
 # Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/main/scripts/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/master/scripts/install.sh \
 #     | sudo BOT_TOKEN=123:abc bash
 #
 # Usage (local clone):
@@ -15,7 +15,7 @@
 #   ADMIN_EMAIL        admin login email          (default admin@localhost)
 #   VLESSICH_DIR       install dir                (default /opt/vlessich)
 #   VLESSICH_REPO      git repo to clone          (default https://github.com/FunNikitos/Vlessich.git)
-#   VLESSICH_BRANCH    branch to track            (default main)
+#   VLESSICH_BRANCH    branch to track            (default master)
 #   VLESSICH_PROFILES  comma-separated compose profiles (e.g. "mtproto,ruleset")
 #   VLESSICH_FORCE_OS  set =1 to bypass OS check
 #
@@ -37,7 +37,7 @@ LIB_DIR="${SCRIPT_DIR}/lib"
 
 VLESSICH_DIR="${VLESSICH_DIR:-/opt/vlessich}"
 VLESSICH_REPO="${VLESSICH_REPO:-https://github.com/FunNikitos/Vlessich.git}"
-VLESSICH_BRANCH="${VLESSICH_BRANCH:-main}"
+VLESSICH_BRANCH="${VLESSICH_BRANCH:-master}"
 VLESSICH_PROFILES="${VLESSICH_PROFILES:-}"
 
 readonly C_RESET='\033[0m'

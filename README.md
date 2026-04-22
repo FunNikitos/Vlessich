@@ -29,7 +29,7 @@ docker-compose.dev.yml
 Одна команда на чистой Ubuntu 22.04 / 24.04 (x86_64 / arm64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/master/scripts/install.sh \
   | sudo BOT_TOKEN=123456:ABC... bash
 ```
 
