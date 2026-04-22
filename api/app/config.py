@@ -90,6 +90,67 @@ class Settings(BaseSettings):
         description="First port of the per-user pool (inclusive).",
     )
 
+    # Stage 10: cron auto-rotation of the shared MTProto secret. Off by
+    # default; enable per-env after smoke-testing the broadcaster.
+    mtg_auto_rotation_enabled: bool = Field(
+        default=False,
+        description="Enable cron-based rotation of ACTIVE shared MTProto secret by age.",
+    )
+    mtg_shared_rotation_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Rotate ACTIVE shared MTProto secret older than N days.",
+    )
+    mtg_rotator_interval_sec: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Seconds between mtproto_rotator worker ticks.",
+    )
+
+    # Stage 10: deeplink rebroadcast pipeline. API XADDs a rotation event
+    # to Redis stream `mtproto:rotated`; broadcaster worker fans out to
+    # affected users via bot HTTP endpoint.
+    mtg_broadcast_enabled: bool = Field(
+        default=False,
+        description="Master switch for emitting and consuming MTProto rotation broadcast events.",
+    )
+    mtg_broadcast_cooldown_sec: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Minimum seconds between two broadcast DMs to the same Telegram chat.",
+    )
+    mtg_broadcast_idempotency_ttl_sec: int = Field(
+        default=86400,
+        ge=3600,
+        le=604800,
+        description="TTL of (event_id, tg_id) idempotency marker in Redis.",
+    )
+    mtg_broadcast_rl_global_per_sec: int = Field(
+        default=30,
+        ge=1,
+        le=30,
+        description="Global broadcast rate-limit (Telegram bot ceiling is 30 msg/s).",
+    )
+    mtg_broadcast_rl_per_chat_sec: int = Field(
+        default=1,
+        ge=1,
+        le=60,
+        description="Minimum seconds between two messages to the same chat (Telegram per-chat limit).",
+    )
+    mtg_broadcast_stream_maxlen: int = Field(
+        default=10000,
+        ge=100,
+        le=1000000,
+        description="Approximate XADD MAXLEN for the mtproto:rotated stream.",
+    )
+    mtg_broadcast_bot_notify_url: str = Field(
+        default="http://bot:8081/internal/notify/mtproto_rotated",
+        description="Bot HTTP endpoint that broadcaster calls with HMAC-signed payload.",
+    )
+
     # Telegram
     bot_token: SecretStr | None = None  # для серверной валидации Mini-App initData
 

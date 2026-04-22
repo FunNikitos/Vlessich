@@ -38,6 +38,8 @@ class ApiCode(StrEnum):
     NOT_IMPLEMENTED = "not_implemented"
     PER_USER_DISABLED = "per_user_disabled"
     POOL_FULL = "pool_full"
+    BROADCAST_FAILED = "broadcast_failed"
+    NOTIFICATION_DISABLED = "notification_disabled"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:

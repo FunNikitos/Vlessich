@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     webapp_url: HttpUrl | None = None
     support_username: str = "vlessich_support"
 
+    # Stage 10: MTProto rotation broadcast endpoint (called by api
+    # `mtproto_broadcaster` worker with HMAC signature). Listens on a
+    # separate aiohttp app from the Telegram webhook.
+    internal_notify_enabled: bool = Field(
+        default=True,
+        description="Enable /internal/notify/* HTTP endpoints in bot process.",
+    )
+    internal_notify_host: str = "0.0.0.0"
+    internal_notify_port: int = 8081
+    internal_notify_path: str = "/internal/notify/mtproto_rotated"
+
     @property
     def use_webhook(self) -> bool:
         return self.webhook_url is not None
