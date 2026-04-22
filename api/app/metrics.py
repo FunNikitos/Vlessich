@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # HTTP request latency, labelled by route template (NOT raw path) so
 # cardinality stays bounded. ``status`` is the integer HTTP status
@@ -41,9 +41,32 @@ SUBSCRIPTION_EVENTS_TOTAL: Final = Counter(
     labelnames=("event",),
 )
 
+# Stage 10: MTProto rotation broadcast pipeline.
+# status: ok | failed | cooldown | duplicate | throttled
+MTPROTO_BROADCAST_SENT_TOTAL: Final = Counter(
+    "vlessich_mtproto_broadcast_sent_total",
+    "MTProto rotation broadcast DM dispatch outcomes.",
+    labelnames=("status",),
+)
+# result: rotated | skipped | error
+MTPROTO_AUTO_ROTATION_TOTAL: Final = Counter(
+    "vlessich_mtproto_auto_rotation_total",
+    "Cron-driven MTProto shared-secret rotation outcomes.",
+    labelnames=("result",),
+)
+# Age of the currently-ACTIVE shared MTProto secret in seconds.
+# Updated by the rotator worker after each tick.
+MTPROTO_SHARED_SECRET_AGE_SECONDS: Final = Gauge(
+    "vlessich_mtproto_shared_secret_age_seconds",
+    "Age (seconds) of the currently-ACTIVE shared MTProto secret.",
+)
+
 
 __all__ = [
     "HTTP_REQUEST_DURATION_SECONDS",
     "ADMIN_LOGIN_TOTAL",
     "SUBSCRIPTION_EVENTS_TOTAL",
+    "MTPROTO_BROADCAST_SENT_TOTAL",
+    "MTPROTO_AUTO_ROTATION_TOTAL",
+    "MTPROTO_SHARED_SECRET_AGE_SECONDS",
 ]
