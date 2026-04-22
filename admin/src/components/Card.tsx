@@ -1,7 +1,7 @@
 /** Spotify-dark card: elevated #181818 bg, 8px radius, optional title. */
 import type { HTMLAttributes, ReactNode } from "react";
 
-export interface CardProps extends HTMLAttributes<HTMLDivElement> {
+export interface CardProps extends Omit<HTMLAttributes<HTMLDivElement>, "title"> {
   title?: ReactNode;
   action?: ReactNode;
   padded?: boolean;
