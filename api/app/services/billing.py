@@ -32,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiCode
+from app.metrics import ORDERS_TOTAL, REFUNDS_TOTAL, REVENUE_XTR_TOTAL
 from app.models import AuditLog, Order, Plan, Subscription
 
 log = structlog.get_logger("billing")
@@ -241,6 +242,7 @@ async def create_order(
         plan_code=plan.code,
         amount_xtr=plan.price_xtr,
     )
+    ORDERS_TOTAL.labels(status="created", plan=plan.code).inc()
     return OrderDraft(
         order_id=order_id,
         invoice_payload=str(order_id),
@@ -395,6 +397,8 @@ async def mark_paid(
         plan_code=plan.code,
         amount_xtr=amount_xtr,
     )
+    ORDERS_TOTAL.labels(status="paid", plan=plan.code).inc()
+    REVENUE_XTR_TOTAL.labels(plan=plan.code).inc(amount_xtr)
     assert sub.expires_at is not None  # set just above
     return PaidResult(
         order_id=order.id,
@@ -466,6 +470,8 @@ async def refund(
         tg_id=order.user_id,
         subscription_revoked=revoked,
     )
+    ORDERS_TOTAL.labels(status="refunded", plan=order.plan_code).inc()
+    REFUNDS_TOTAL.labels(plan=order.plan_code).inc()
     return order, revoked
 
 

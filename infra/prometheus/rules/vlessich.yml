@@ -128,3 +128,34 @@ groups:
             `/internal/notify/mtproto_rotated` unreachable or
             returning 4xx/5xx consistently. Check broadcaster logs
             and bot notify endpoint reachability.
+
+  - name: vlessich.billing
+    interval: 30s
+    rules:
+      - alert: OrderFailureSpike
+        expr: rate(vlessich_orders_total{status="failed"}[15m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Telegram Stars order failure rate elevated"
+          description: |
+            > 0.1 failed orders per second over 15m. Either pricing
+            mismatches (PAYMENT_AMOUNT_MISMATCH) or stale PENDING
+            cleanup spike. Check `/admin/orders?status=FAILED` and
+            recent `vlessich.billing.*` log entries.
+
+      - alert: RefundVolumeHigh
+        expr: rate(vlessich_refunds_total[1h]) > 0.05
+        for: 1h
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Telegram Stars refund volume elevated"
+          description: |
+            > 0.05 refunds per second sustained for 1h. Possible abuse,
+            mass dissatisfaction, or admin tooling misuse. Audit
+            `/admin/orders?status=REFUNDED` and `audit_log` for
+            `order_refunded` actor distribution.

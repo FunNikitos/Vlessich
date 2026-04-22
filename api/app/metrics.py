@@ -62,6 +62,25 @@ MTPROTO_SHARED_SECRET_AGE_SECONDS: Final = Gauge(
 )
 
 
+# Stage 11: Billing / Telegram Stars.
+# status: created | paid | refunded | failed
+ORDERS_TOTAL: Final = Counter(
+    "vlessich_orders_total",
+    "Telegram Stars order lifecycle events.",
+    labelnames=("status", "plan"),
+)
+REVENUE_XTR_TOTAL: Final = Counter(
+    "vlessich_revenue_xtr_total",
+    "Total Telegram Stars (XTR) collected per plan (PAID only).",
+    labelnames=("plan",),
+)
+REFUNDS_TOTAL: Final = Counter(
+    "vlessich_refunds_total",
+    "Telegram Stars refunds per plan.",
+    labelnames=("plan",),
+)
+
+
 __all__ = [
     "HTTP_REQUEST_DURATION_SECONDS",
     "ADMIN_LOGIN_TOTAL",
@@ -69,4 +88,7 @@ __all__ = [
     "MTPROTO_BROADCAST_SENT_TOTAL",
     "MTPROTO_AUTO_ROTATION_TOTAL",
     "MTPROTO_SHARED_SECRET_AGE_SECONDS",
+    "ORDERS_TOTAL",
+    "REVENUE_XTR_TOTAL",
+    "REFUNDS_TOTAL",
 ]

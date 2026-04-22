@@ -28,6 +28,7 @@ from app.routers.admin import stats as admin_stats
 from app.routers.admin import subscriptions as admin_subs
 from app.routers.admin import views as admin_views
 from app.startup.mtproto_seed import seed_shared_secret
+from app.services.billing import seed_default_plans
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
@@ -81,6 +82,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_engine(settings.database_url)
     init_redis(settings.redis_url)
     await seed_shared_secret(get_sessionmaker(), settings)
+    sm = get_sessionmaker()
+    async with sm() as _seed_sess:
+        await seed_default_plans(_seed_sess)
     log.info("api.start", env=settings.env)
     try:
         yield
