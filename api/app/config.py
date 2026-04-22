@@ -68,6 +68,28 @@ class Settings(BaseSettings):
         description="Cloak domain bound to the seeded shared secret.",
     )
 
+    # Stage 9: per-user MTProto secrets. When disabled, scope='user'
+    # in /internal/mtproto/issue returns 501 per_user_disabled. When
+    # enabled, the allocator binds each user to a free port in the
+    # range [port_base, port_base + pool_size). Operator must run
+    # `pool_size` mtg containers on those ports (see ansible/roles/mtg).
+    mtg_per_user_enabled: bool = Field(
+        default=False,
+        description="Feature flag for per-user MTProto secret allocator.",
+    )
+    mtg_per_user_pool_size: int = Field(
+        default=16,
+        ge=1,
+        le=512,
+        description="Number of mtg containers / ports available for per-user secrets.",
+    )
+    mtg_per_user_port_base: int = Field(
+        default=8443,
+        ge=1,
+        le=65535,
+        description="First port of the per-user pool (inclusive).",
+    )
+
     # Telegram
     bot_token: SecretStr | None = None  # для серверной валидации Mini-App initData
 

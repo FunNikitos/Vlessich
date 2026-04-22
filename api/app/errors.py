@@ -36,6 +36,8 @@ class ApiCode(StrEnum):
     NODE_NOT_FOUND = "node_not_found"
     CAPTCHA_FAILED = "captcha_failed"
     NOT_IMPLEMENTED = "not_implemented"
+    PER_USER_DISABLED = "per_user_disabled"
+    POOL_FULL = "pool_full"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:
