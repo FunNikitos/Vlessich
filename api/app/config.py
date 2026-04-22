@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     )
     mtg_host: str = "mtp.example.com"
     mtg_port: int = 443
+    # Stage 8: bootstrap a single shared MtprotoSecret on API startup so
+    # /internal/mtproto/issue (scope='shared') has something to hand
+    # out without manual seeding. Unset → seed skipped (dev). Format:
+    # 32 lowercase hex chars (matches mtg secret body without the 'ee'
+    # prefix and cloak suffix — those are derived from cloak below).
+    mtg_shared_secret_hex: SecretStr | None = Field(
+        default=None,
+        description="Shared MTProto secret (32 hex chars) seeded at startup.",
+    )
+    mtg_shared_cloak: str = Field(
+        default="www.microsoft.com",
+        description="Cloak domain bound to the seeded shared secret.",
+    )
 
     # Telegram
     bot_token: SecretStr | None = None  # для серверной валидации Mini-App initData

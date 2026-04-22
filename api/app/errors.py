@@ -35,6 +35,7 @@ class ApiCode(StrEnum):
     ALREADY_INACTIVE = "already_inactive"
     NODE_NOT_FOUND = "node_not_found"
     CAPTCHA_FAILED = "captcha_failed"
+    NOT_IMPLEMENTED = "not_implemented"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:
