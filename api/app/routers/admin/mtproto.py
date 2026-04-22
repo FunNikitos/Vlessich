@@ -36,12 +36,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.admin import AdminClaims, require_admin_role
 from app.config import get_settings
-from app.db import get_session
+from app.db import get_redis, get_session
 from app.errors import ApiCode, api_error
 from app.models import AuditLog, MtprotoSecret
 from app.services.mtproto_allocator import (
@@ -50,6 +51,7 @@ from app.services.mtproto_allocator import (
     revoke_user_secret,
     rotate_user_secret,
 )
+from app.services.mtproto_broadcast import emit_rotation_event
 
 router = APIRouter(prefix="/admin/mtproto", tags=["admin"])
 
@@ -96,6 +98,7 @@ class RotateOut(BaseModel):
 async def rotate(
     payload: RotateIn,
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
     claims: Annotated[AdminClaims, Depends(require_admin_role("superadmin"))],
 ) -> RotateOut:
     settings = get_settings()
@@ -147,6 +150,13 @@ async def rotate(
         )
 
     full = full_secret(new_hex, cloak)
+    if settings.mtg_broadcast_enabled:
+        try:
+            await emit_rotation_event(
+                redis, scope="shared", secret_id=str(fresh.id)
+            )
+        except Exception:  # noqa: BLE001 — broadcast best-effort
+            pass
     return RotateOut(
         secret_id=str(fresh.id),
         secret_hex=new_hex,
@@ -376,6 +386,7 @@ class UserRotateOut(BaseModel):
 async def rotate_user(
     uid: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_redis)],
     claims: Annotated[AdminClaims, Depends(require_admin_role("superadmin"))],
 ) -> UserRotateOut:
     settings = get_settings()
@@ -405,6 +416,16 @@ async def rotate_user(
         )
 
     assert new_secret.port is not None
+    if settings.mtg_broadcast_enabled:
+        try:
+            await emit_rotation_event(
+                redis,
+                scope="user",
+                secret_id=str(new_secret.id),
+                user_id=uid,
+            )
+        except Exception:  # noqa: BLE001 — broadcast best-effort
+            pass
     return UserRotateOut(
         secret_id=str(new_secret.id),
         user_id=uid,
