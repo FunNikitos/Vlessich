@@ -31,6 +31,10 @@ def _main_kb() -> InlineKeyboardMarkup:
     rows.append(
         [InlineKeyboardButton(text="💳 Показать подписку", callback_data="sub:show")]
     )
+    if settings.smart_routing_enabled:
+        rows.append(
+            [InlineKeyboardButton(text="📥 Получить конфиг", callback_data="cfg:start")]
+        )
     if settings.webapp_url:
         rows.append(
             [

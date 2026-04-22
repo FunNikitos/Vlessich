@@ -71,6 +71,18 @@ class Settings(BaseSettings):
         description="HMAC POST endpoint on notify_server invoked by API admin refund.",
     )
 
+    # Stage 12: Smart-routing. Master flag gates the /config command +
+    # main-menu button. Sub-Worker base URL is used to craft the
+    # download deep-link handed to the user after profile switch.
+    smart_routing_enabled: bool = Field(
+        default=False,
+        description="Enable /config command and routing profile selector.",
+    )
+    sub_worker_base_url: HttpUrl | None = Field(
+        default=None,
+        description="Public sub-Worker base URL for subscription download links.",
+    )
+
     @property
     def use_webhook(self) -> bool:
         return self.webhook_url is not None

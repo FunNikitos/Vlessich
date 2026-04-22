@@ -70,6 +70,14 @@ class PaymentSuccessAck:
     new_expires_at: str | None
 
 
+@dataclass(slots=True)
+class RoutingProfileAck:
+    subscription_id: str
+    profile: str
+    adblock: bool
+    smart_routing: bool
+
+
 class ApiClient:
     def __init__(self) -> None:
         settings = get_settings()
@@ -206,6 +214,22 @@ class ApiClient:
             order_id=str(data["order_id"]),
             subscription_id=str(data["subscription_id"]),
             new_expires_at=_opt_str(data.get("new_expires_at")),
+        )
+
+    # ----- smart-routing (Stage 12) ---------------------------------------
+
+    async def set_routing_profile(
+        self, *, tg_id: int, profile: str
+    ) -> RoutingProfileAck:
+        data = await self._post(
+            "/internal/smart_routing/set_profile",
+            {"tg_id": tg_id, "profile": profile},
+        )
+        return RoutingProfileAck(
+            subscription_id=str(data["subscription_id"]),
+            profile=str(data["profile"]),
+            adblock=bool(data["adblock"]),
+            smart_routing=bool(data["smart_routing"]),
         )
 
     # ----- internal -------------------------------------------------------
