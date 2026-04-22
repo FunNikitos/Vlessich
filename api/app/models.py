@@ -211,6 +211,9 @@ class Subscription(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     sub_url_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     remna_user_id: Mapped[str | None] = mapped_column(Text)
+    last_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL")
+    )
 
     devices: Mapped[list["Device"]] = relationship(back_populates="subscription")
 
@@ -431,4 +434,83 @@ class AdminLoginAttempt(Base):
     ip_hash: Mapped[str | None] = mapped_column(CHAR(64))
     at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Billing — Plans (fixed SKU catalog) + Orders (purchase lifecycle)
+# Stage 11 (Telegram Stars MVP, currency='XTR').
+# ---------------------------------------------------------------------------
+class Plan(Base):
+    __tablename__ = "plans"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_plans_code"),
+        CheckConstraint("duration_days > 0", name="ck_plans_duration_pos"),
+        CheckConstraint("price_xtr > 0", name="ck_plans_price_pos"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_xtr: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="XTR", server_default="XTR"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Order(Base):
+    __tablename__ = "orders"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING','PAID','REFUNDED','FAILED')",
+            name="ck_orders_status",
+        ),
+        CheckConstraint("amount_xtr > 0", name="ck_orders_amount_pos"),
+        Index(
+            "ix_orders_one_pending_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        Index("ix_orders_user_created", "user_id", "created_at"),
+        Index(
+            "ix_orders_telegram_charge_id",
+            "telegram_payment_charge_id",
+            unique=True,
+            postgresql_where=text("telegram_payment_charge_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.tg_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    plan_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount_xtr: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(
+        String(8), nullable=False, default="XTR", server_default="XTR"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="PENDING", server_default="PENDING"
+    )
+    invoice_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_payment_charge_id: Mapped[str | None] = mapped_column(String(255))
+    provider_payment_charge_id: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refunded_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL")
     )
