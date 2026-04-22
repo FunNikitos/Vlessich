@@ -58,3 +58,14 @@ def test_rules_structure() -> None:
         "ApiP95Latency",
         "AdminCaptchaFailSpike",
     } <= seen_alerts
+
+
+def test_stage12_ruleset_alerts_present() -> None:
+    doc = yaml.safe_load(_RULES.read_text(encoding="utf-8"))
+    seen = {
+        rule["alert"]
+        for group in doc["groups"]
+        for rule in group["rules"]
+        if "alert" in rule
+    }
+    assert {"RulesetPullFailures", "RulesetStale"} <= seen
