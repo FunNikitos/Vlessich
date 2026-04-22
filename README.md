@@ -53,7 +53,14 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 # Shared-секрет сидится из API_MTG_SHARED_SECRET_HEX при старте API
 # (идемпотентно). Ротация: POST /admin/mtproto/rotate (superadmin) →
 # положить config_line из ответа в mtg/config.toml и `docker compose restart mtg`.
-# Per-user MTProto отложен до Stage 9 (scope='user' → 501 not_implemented).
+# Per-user MTProto (Stage 9): pre-seeded FREE-pool. Сначала
+# `docker compose --profile per-user-mtg up` поднимает 4 mtg-контейнера
+# (8444..8447). Bootstrap пула:
+#   curl -X POST http://localhost:8000/admin/mtproto/pool/bootstrap \
+#     -H "Authorization: Bearer $JWT" -H "content-type: application/json" \
+#     -d '{"count":4,"port_base":8444}'
+# Скармливаешь `items` в `./mtg/pool/{port}.toml` (см. mtg/README.md),
+# ставишь API_MTG_PER_USER_ENABLED=true, перезапускаешь api.
 ```
 
 ## API surface
@@ -73,6 +80,11 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `GET  /admin/nodes/{id}/health`   | JWT         | Node health: uptime + p50/p95 + probes          |
 | `POST /admin/nodes/{id}/rotate`   | JWT superadmin | Подтверждение ротации IP (clear IP + HEALTHY) |
 | `POST /admin/mtproto/rotate`      | JWT superadmin | Ротация shared MTProto-секрета (Stage 8)        |
+| `POST /admin/mtproto/pool/bootstrap`     | JWT superadmin | Pre-seed FREE per-user MTProto pool (Stage 9, idempotent)  |
+| `GET  /admin/mtproto/pool/config`        | JWT superadmin | Dump FREE+ACTIVE per-user secrets для regen mtg config     |
+| `POST /admin/mtproto/users/{uid}/rotate` | JWT superadmin | REVOKE + claim fresh FREE per-user секрет (Stage 9, gated) |
+| `POST /admin/mtproto/users/{uid}/revoke` | JWT superadmin | Mark per-user ACTIVE → REVOKED                              |
+| `GET  /admin/mtproto/users`              | JWT readonly+  | Paginated per-user secrets list (metadata only)             |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (user + sub summary)         |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
 | `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |

@@ -997,3 +997,116 @@ red<0.5, green>=0.5).
 - Admin UI страница для mtg (rotate-button + current secret id) —
   backend endpoint готов, UI отложен.
 
+## 20. Per-User MTProto Pool (Stage 9)
+
+### Проблема
+
+`mtg` форвардит трафик ТОЛЬКО для секретов, статически прописанных в
+`config.toml`. Это значит — API не может «выдать пользователю
+свежесгенерированный секрет» в рантайме: mtg его просто не знает.
+Для per-user MTProto нужен механизм, где секреты создаются оператором
+вместе с mtg-контейнерами, а API только привязывает существующие
+секреты к пользователям.
+
+### Модель: FREE-pool + operator bootstrap
+
+**Source-of-truth = БД** (`mtproto_secrets` table, `scope='user'`).
+
+Статусы (per-user):
+- `FREE` — секрет создан, порт выделен, но пользователя ещё нет.
+  Pre-seeded оператором через `/admin/mtproto/pool/bootstrap`.
+- `ACTIVE` — привязан к `user_id`. Allocator флипает FREE→ACTIVE.
+- `REVOKED` — бывший ACTIVE. Порт остаётся закреплён за этой строкой
+  (mtg всё ещё форвардит этот секрет до rebuild конфига). Не
+  возвращается в FREE.
+
+### Bootstrap flow
+
+```
+Operator
+  │
+  │  POST /admin/mtproto/pool/bootstrap
+  │    {"count": 16, "port_base": 8443, "cloak_domain": "..."}
+  ▼
+API
+  │ 1. Skip ports already in DB (scope='user', any status)
+  │ 2. INSERT rest as FREE rows (lowercase hex secret + port + cloak)
+  │ 3. AuditLog mtproto_pool_bootstrapped {inserted_ports, skipped_ports}
+  │    — без secret material
+  │ 4. Response (ONE-TIME, full secret material)
+  ▼
+Operator
+  │  ansible-playbook ... -e "mtg_per_user_enabled=true" \
+  │       -e "@pool_items.json"
+  ▼
+Ansible (roles/node/tasks/mtg_per_user.yml)
+  │ 1. Render /opt/mtg/pool/{port}.toml from mtg.pool.config.toml.j2
+  │ 2. Install systemd templated unit mtg@.service
+  │ 3. systemctl enable + start mtg@<port>.service per item
+  ▼
+mtg containers listening on [port_base, port_base+count)
+```
+
+### Allocator
+
+```sql
+SELECT * FROM mtproto_secrets
+ WHERE scope = 'user' AND status = 'FREE'
+ ORDER BY port ASC
+ FOR UPDATE SKIP LOCKED
+ LIMIT 1;
+```
+
+Параллельные `/internal/mtproto/issue` с `scope='user'` получают
+разные строки (SKIP LOCKED). Выбранная строка флипается в `ACTIVE +
+user_id=...`. Идемпотентность: если у юзера уже есть ACTIVE — возврат
+as-is, пул не тратится.
+
+Пул пуст → `503 pool_full`.
+
+### Rotation / revocation
+
+- **Rotate** (admin): REVOKE current ACTIVE + claim fresh FREE.
+  Тратит слот пула (revoked порт занят). Response несёт
+  `pool_free_remaining` → оператор видит когда пора bootstrap ещё.
+- **Revoke** (admin): ACTIVE → REVOKED. Порт НЕ освобождается.
+
+После любой mutation оператор может дёрнуть `GET
+/admin/mtproto/pool/config` → получить полный dump FREE+ACTIVE →
+regenerate mtg config → redeploy / `systemctl restart mtg@*`.
+
+### Feature gate
+
+`API_MTG_PER_USER_ENABLED=false` (default):
+- `/internal/mtproto/issue scope='user'` → 501 `per_user_disabled`.
+- `/admin/mtproto/users/{uid}/rotate` → 501 `per_user_disabled`.
+- `/admin/mtproto/pool/bootstrap` + `/pool/config` — доступны до
+  flip'а флага (оператор должен засеять пул ДО его включения).
+- `/admin/mtproto/users/{uid}/revoke` + `GET /users` — доступны
+  независимо (оператор может revoke'ать и смотреть всегда).
+
+### Security invariants
+
+1. Secret material (`secret_hex`, `full_secret`) **никогда** не
+   попадает в AuditLog / structlog. Payload mutation events содержит
+   только `{port, revoked_secret_id, inserted_ports, count}`.
+2. Ответ `/pool/bootstrap` — single-shot. После его получения полный
+   секрет материал в API можно достать только через `/pool/config`
+   (superadmin, audit, не кэшируется).
+3. FREE-строки не имеют `user_id` (CHECK `free_no_user`). ACTIVE/
+   REVOKED обязаны иметь `user_id` (rewritten
+   `scope_user_consistency`).
+4. Legacy status `ROTATED` запрещён для scope=user (CHECK
+   `user_status_consistency`). Оставлен только для shared.
+5. Partial unique index `ux_mtproto_user_active` гарантирует что у
+   юзера максимум одна ACTIVE-строка; `ux_mtproto_port_live` — что
+   один порт обслуживает максимум один live (FREE|ACTIVE) секрет.
+
+### Что НЕ в этом этапе
+
+- Auto-rebroadcast deeplinks при rotate (bot-side mass DM).
+- Cron auto-rotation.
+- Admin UI страница для pool (manual operator workflow: cURL + CLI).
+- Multi-host sharding (N VPS × M ports per VPS).
+
+

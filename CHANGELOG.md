@@ -7,7 +7,126 @@
 
 ## [Unreleased]
 
-## [0.8.0] — 2026-04-22 — Stage 8: MTProto (mtg) Container Wiring + Admin Rotation
+## [0.9.0] — 2026-04-22 — Stage 9: Per-User MTProto Secrets (FREE-pool model)
+
+### Architecture
+
+Per-user MTProto — это pre-seeded пул `MtprotoSecret(scope='user')` в
+БД. Source-of-truth = БД (mtg не может минтить секреты в рантайме —
+он форвардит трафик только для секретов, статически прописанных в
+`config.toml`). Оператор bootstrap'ит пул через API endpoint
+(получает secret material единожды), скармливает response в Ansible,
+Ansible рендерит N конфигов mtg и запускает N контейнеров mtg через
+systemd templated unit (`mtg@.service`) на портах
+`[port_base, port_base + pool_size)`.
+
+Аллокатор только *флипает* существующие FREE-строки в ACTIVE под
+`SELECT … FOR UPDATE SKIP LOCKED LIMIT 1` — без гонок при параллельной
+выдаче. Rotate тратит слот (порт остаётся занят на REVOKED-строке
+пока оператор не перегенерирует mtg config). Фича гейтится
+`API_MTG_PER_USER_ENABLED`.
+
+Подробнее — `docs/ARCHITECTURE.md` §20, `docs/plan-stage-9.md`.
+
+### Added
+- **api/config**: `mtg_per_user_enabled: bool = False`,
+  `mtg_per_user_pool_size: int = 16` (1..512),
+  `mtg_per_user_port_base: int = 8443` (1..65535). Env:
+  `API_MTG_PER_USER_ENABLED`, `API_MTG_PER_USER_POOL_SIZE`,
+  `API_MTG_PER_USER_PORT_BASE`.
+- **api/errors**: `ApiCode.PER_USER_DISABLED = "per_user_disabled"`
+  (501 когда фича выключена), `ApiCode.POOL_FULL = "pool_full"` (503
+  когда FREE-слоты закончились).
+- **api/alembic/versions/0005_stage9.py**: `mtproto_secrets.port int`
+  nullable column; extend status CHECK с `FREE`; переписан
+  `scope_user_consistency` (FREE не имеет user_id, ACTIVE/REVOKED —
+  имеют); +CHECKs `port_range` (1..65535), `user_port_consistency`
+  (scope=user ↔ port NOT NULL), `user_status_consistency` (scope=user
+  только ACTIVE/REVOKED/FREE, legacy ROTATED запрещён), `free_no_user`
+  (status=FREE → user_id NULL); 2 partial unique индекса:
+  `ux_mtproto_user_active` (scope=user AND status=ACTIVE ON user_id),
+  `ux_mtproto_port_live` (scope=user AND status IN (FREE,ACTIVE) ON
+  port). Down-migration безопасен.
+- **api/app/services/mtproto_allocator.py** (новый):
+  `get_active_user_secret`, `free_pool_count`, `_claim_free_slot`
+  (lowest-port FREE под SKIP LOCKED), `allocate_user_secret`
+  (идемпотентен на existing ACTIVE), `rotate_user_secret`
+  (REVOKE + claim FREE; пул пуст → POOL_FULL, caller tx rollback),
+  `revoke_user_secret` (ACTIVE→REVOKED, порт не освобождается),
+  `deeplink`, `full_secret`.
+- **api/app/routers/mtproto.py**: `/internal/mtproto/issue` для
+  `scope='user'` гейтится `mtg_per_user_enabled` (501
+  `per_user_disabled` когда off; 503 `pool_full` когда пул пуст).
+  Audit payload `{scope, port}` — без secret material.
+- **api/app/routers/admin/mtproto.py**:
+  - `POST /admin/mtproto/pool/bootstrap` (superadmin, idempotent):
+    вставляет FREE-строки для портов `[port_base, port_base+count)`
+    кроме уже существующих в DB (FREE/ACTIVE/REVOKED). Response
+    **единожды** отдаёт `items: [{secret_id, port, secret_hex,
+    cloak_domain, full_secret}]` для Ansible. Audit
+    `mtproto_pool_bootstrapped` с `inserted_ports`/`skipped_ports` —
+    без secret material.
+  - `GET /admin/mtproto/pool/config` (superadmin): дамп FREE+ACTIVE
+    scope=user с full_secret для регенерации mtg config. Audit
+    `mtproto_pool_config_dumped`.
+  - `POST /admin/mtproto/users/{uid}/rotate` (superadmin, гейтится
+    фичей): REVOKE current ACTIVE + claim fresh FREE. Response несёт
+    `pool_free_remaining`. Audit `mtproto_user_rotated` с
+    `port`/`revoked_secret_id`.
+  - `POST /admin/mtproto/users/{uid}/revoke` (superadmin): allocator
+    revoke_user_secret; 404 `user_not_found` если нет ACTIVE. Audit
+    `mtproto_user_revoked`.
+  - `GET /admin/mtproto/users` (readonly+): пагинация с фильтрами
+    `status`/`user_id`, только metadata (без secret_hex/full_secret).
+- **mtg/config.template.toml** (новый): Jinja2 template для per-port
+  конфига (`{{ secret }}`, `{{ port }}`, Prometheus на `port+1000`).
+- **ansible/roles/node/tasks/mtg_per_user.yml** (новый): цикл по
+  `mtg_per_user_pool_items` → рендер `/opt/mtg/pool/{port}.toml` из
+  `mtg.pool.config.toml.j2` + install `mtg@.service` systemd
+  templated unit + enable/start per port. Гейтится
+  `mtg_per_user_enabled`.
+- **ansible/roles/node/templates/mtg.pool.config.toml.j2** (новый):
+  per-port mtg config с bind `0.0.0.0:{{ mtg_port }}` и Prometheus
+  `127.0.0.1:{{ mtg_port + 1000 }}`.
+- **ansible/roles/node/defaults/main.yml**: `mtg_per_user_enabled:
+  false`, `mtg_per_user_pool_items: []` (оператор скармливает
+  response от `/pool/bootstrap` через vault или `-e @pool.json`).
+- **ansible/roles/node/handlers/main.yml**: handler `restart mtg pool`
+  итерирует `mtg_per_user_pool_items` и дёргает
+  `mtg@{{ item.port }}.service`.
+- **docker-compose.dev.yml**: профиль `per-user-mtg` с 4 сервисами
+  `mtg-8444..mtg-8447` для локального e2e. Оператор кладёт
+  `./mtg/pool/{port}.toml` из `/admin/mtproto/pool/config` перед
+  `docker compose --profile per-user-mtg up`.
+- **docs/plan-stage-9.md**: план этапа (v2, FREE-pool).
+- **api/tests/test_mtproto_allocator.py** (новый, Postgres-gated):
+  пул пустой → POOL_FULL; FREE→ACTIVE на lowest-port; идемпотентность
+  для existing ACTIVE; rotate REVOKE+claim; revoke ACTIVE→REVOKED /
+  None когда нет ACTIVE.
+- **api/tests/test_mtproto_issue.py**: per_user_disabled когда фича
+  выключена; happy-path scope=user с pre-seeded FREE row → 200 с
+  портом из пула и row flipped ACTIVE; пул пустой → 503 `pool_full`.
+- **api/tests/test_admin_mtproto.py**: /pool/bootstrap идемпотентность
+  + skipped_ports + audit без secret material; /pool/config dump
+  исключает REVOKED; /users/{uid}/rotate REVOKE+claim+audit port;
+  /users/{uid}/revoke 200/404; RBAC (support→403 на user rotate,
+  readonly→403 на bootstrap, readonly→200 на GET /users без secret
+  material).
+
+### Changed
+- **api/app/models.py**: `MtprotoSecret` получил `port: int | None`,
+  расширенный status CHECK и 4 новых CHECK-констрейнта (см. Added →
+  migration 0005).
+- **api/.env.example**: добавлены `API_MTG_PER_USER_ENABLED`,
+  `API_MTG_PER_USER_POOL_SIZE`, `API_MTG_PER_USER_PORT_BASE`.
+
+### Not in scope (отложено в Stage 10+)
+- Auto-rebroadcast deeplinks активным пользователям при rotate.
+- Cron auto-rotation.
+- Admin UI страница для pool management.
+- Multi-host sharding pool'а (N хостов × M портов).
+
+
 
 ### Added
 - **api/config**: `mtg_shared_secret_hex: SecretStr | None` и

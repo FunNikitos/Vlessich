@@ -34,6 +34,11 @@ uvicorn app.main:app --reload --port 8000
 | `GET  /admin/nodes/{id}/health`   | JWT         | uptime 24h + p50/p95 latency + last 50 probes   |
 | `POST /admin/nodes/{id}/rotate`   | JWT superadmin | Подтверждение ротации IP (clear IP + HEALTHY) |
 | `POST /admin/mtproto/rotate`      | JWT superadmin | Ротация shared MTProto-секрета (Stage 8)        |
+| `POST /admin/mtproto/pool/bootstrap`     | JWT superadmin | Pre-seed FREE per-user pool (Stage 9, idempotent)            |
+| `GET  /admin/mtproto/pool/config`        | JWT superadmin | Dump FREE+ACTIVE для regen mtg config                        |
+| `POST /admin/mtproto/users/{uid}/rotate` | JWT superadmin | REVOKE + claim fresh FREE (Stage 9, gated)                   |
+| `POST /admin/mtproto/users/{uid}/revoke` | JWT superadmin | Mark ACTIVE → REVOKED                                         |
+| `GET  /admin/mtproto/users`              | JWT readonly+  | Paginated per-user list (metadata only)                       |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap                              |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: подписка + sub-URLs + devices         |
 | `POST /v1/webapp/subscription/toggle` | initData | adblock / smart_routing toggle                  |
@@ -60,6 +65,9 @@ uvicorn app.main:app --reload --port 8000
 | `API_MTG_SHARED_CLOAK` | `www.microsoft.com` | Fake-TLS cloak domain для shared секрета. Используется seed'ом и rotate-endpoint'ом по умолчанию. |
 | `API_MTG_HOST` | `mtp.example.com` | Host в `tg://proxy` deeplink'ах. |
 | `API_MTG_PORT` | `443` | Port в `tg://proxy` deeplink'ах. |
+| `API_MTG_PER_USER_ENABLED` | `false` | Stage 9 feature gate. Off → `/internal/mtproto/issue scope='user'` → 501 `per_user_disabled`. On → allocator берёт FREE из pool, 503 `pool_full` если пусто. |
+| `API_MTG_PER_USER_POOL_SIZE` | `16` | Default `count` для `/admin/mtproto/pool/bootstrap` (1..512). |
+| `API_MTG_PER_USER_PORT_BASE` | `8443` | Default `port_base` для bootstrap (1..65535). Pool занимает `[port_base, port_base + pool_size)`. |
 
 ## Миграции
 

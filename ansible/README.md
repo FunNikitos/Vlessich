@@ -58,6 +58,14 @@ ansible-playbook -i inventory/hosts.yml site.yml --tags nftables
 # Включить mtg на этой ноде
 ansible-playbook -i inventory/hosts.yml site.yml --tags mtg \
   -e mtg_enabled=true
+
+# Per-user mtg pool (Stage 9): рендер N конфигов + systemd mtg@.service
+# на каждый порт. pool_items.json — это массив
+# [{port, secret}], полученный из POST /admin/mtproto/pool/bootstrap.
+# См. mtg/README.md для полного workflow.
+ansible-playbook -i inventory/hosts.yml site.yml --tags per_user \
+  -e mtg_per_user_enabled=true \
+  -e "@pool_items.json"
 ```
 
 ## Через Makefile (рекомендуется)
@@ -104,6 +112,7 @@ ansible/
         │   ├── xray.yml
         │   ├── adguardhome.yml
         │   ├── mtg.yml
+        │   ├── mtg_per_user.yml
         │   ├── monitoring.yml
         │   ├── backup.yml
         │   └── fail2ban.yml
@@ -112,5 +121,6 @@ ansible/
             ├── Caddyfile.j2
             ├── xray.config.json.j2
             ├── AdGuardHome.yaml.j2
-            └── mtg.config.toml.j2
+            ├── mtg.config.toml.j2
+            └── mtg.pool.config.toml.j2
 ```
