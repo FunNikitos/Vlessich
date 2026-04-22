@@ -1,183 +1,209 @@
-# Stage 9 — Per-User MTProto Secrets
+# Stage 9 — Per-User MTProto Secrets (FREE-pool model)
 
 Status: in_progress (branched off Stage 8 HEAD `6280fac`).
 
 ## Goal
 
-Flip the `scope='user'` branch in `/internal/mtproto/issue` from 501 to
-a real allocation: each user gets a dedicated MTProto secret bound to
-a dedicated mtg instance listening on a distinct port. Resilient
-enough for dev (N replicas via docker compose profile) and prod
-(Ansible systemd template unit spawning N containers on a single
-host, 8443+i).
+Flip `scope='user'` in `/internal/mtproto/issue` from 501 to a real
+allocation: each user gets a dedicated MTProto secret bound to a
+dedicated port. **Secrets are pre-generated and known to mtg in
+advance** — API cannot mint new ones at runtime (mtg only accepts
+secrets configured statically in `config.toml`).
+
+## Architecture pivot (vs. naive runtime-mint)
+
+The naive design (allocator generates `secrets.token_hex(16)` on
+demand) is broken: mtg only forwards traffic for secrets listed in
+its config. A runtime-minted secret would never reach mtg.
+
+**Source-of-truth = DB**. Operator bootstraps a pool of FREE
+secrets via admin endpoint; API renders an mtg config bundle that
+Ansible deploys to N containers (ports `8443..8443+N-1`). Allocator
+just *claims* a FREE row for a user — no new secret material ever
+appears.
+
+```
+                         ┌──── API ────┐
+admin POST bootstrap ───▶│             │── INSERT N rows status=FREE
+                         │  DB pool    │
+                         │ (FREE/ACTIVE)│
+                         └──────────────┘
+                                │
+                                ▼ (operator pulls)
+                       GET pool/config
+                                │
+                                ▼ (Ansible templates per-port mtg config)
+                          mtg_8443  mtg_8444 ... mtg_8443+N-1
+                                ▲
+internal POST issue scope=user ─┤  allocator SELECT FREE FOR UPDATE
+                                │  SKIP LOCKED LIMIT 1 → SET status=ACTIVE
+                                ▼
+                          tg://proxy?server=mtp&port=8444&secret=ee…
+```
 
 ## Locked decisions
 
-- **Orchestration**: **N containers** on ports `8443..8443+MAX-1`.
-  Not `[replicas]` (mtg pro), not custom fork. Each container gets
-  its own `config.toml` generated from a template; systemd templated
-  unit (`mtg@.service`) manages them in prod. In dev we expose a
-  `per-user-mtg` compose **profile** with N services so default
-  `docker compose up` stays lean.
-- **Port allocation strategy**: first-fit into the free pool, not
-  hash-based. Hash-based collides and wastes replicas; first-fit is
-  O(log n) via a partial unique index and matches how we already
-  allocate devices.
-- **Pool sizing**: `API_MTG_PER_USER_POOL_SIZE` (default 16 in dev,
-  configurable in prod via env). Ceiling is hard: 65535-8443 but
-  practically ≤ 256 per host. Exceeded → `ApiCode.POOL_FULL` →
-  503 user-facing message "MTProto перегружен, повтори позже".
-- **Feature gate**: `API_MTG_PER_USER_ENABLED: bool = False`. When
-  off, scope='user' keeps returning 501 `per_user_disabled` (not
-  `not_implemented`; we reuse a dedicated code so bot can tell "not
-  implemented at all" from "deliberately disabled on this install"
-  apart). When on, the full allocator runs.
-- **Secret binding**: `MtprotoSecret(scope='user', user_id=...,
-  port=...)`. Add `port: int | null` column; `NOT NULL` only for
-  scope='user' via CHECK constraint. Unique `(user_id)` across
-  ACTIVE user-scope rows (1 secret per user at a time). Unique
-  `(port)` across ACTIVE user-scope rows (1 port per container).
-  Both enforced by **partial** unique indexes on `WHERE
-  status='ACTIVE' AND scope='user'`.
-- **Rotation (per-user)**: `POST /admin/mtproto/users/{user_id}/rotate`
-  (superadmin). Flips old ACTIVE user-secret → REVOKED, allocates a
-  new (secret_hex, port) pair. Port MAY be reused (allocator picks
-  free slot). Audit: `mtproto_user_rotated`.
-- **Revoke**: `POST /admin/mtproto/users/{user_id}/revoke` → marks
-  ACTIVE user-secret REVOKED, frees port. Audit:
-  `mtproto_user_revoked`.
-- **List**: `GET /admin/mtproto/users` (readonly+) → paginated list
-  `{user_id, secret_id, port, cloak_domain, status, created_at}`.
-- **Cloak selection**: round-robin over `API_MTG_CLOAK_DOMAINS` when
-  allocating. Existing setting, just start using it for scope='user'.
-- **Audit hygiene**: `secret_hex` / `full_secret` NEVER land in
-  `AuditLog.payload`. Payload carries `{port, cloak_domain,
-  revoked_secret_id?}` only. Enforced by tests (same pattern as
-  Stage 8).
+- **Pool seeding**: `POST /admin/mtproto/pool/bootstrap` (superadmin)
+  with `{count: int, port_base?: int, cloak_domain?: str}`. API:
+  1. Iterates `port_base..port_base+count-1`, skips ports already
+     present in DB with status in `('ACTIVE','FREE')`.
+  2. INSERTs FREE rows for the rest with fresh
+     `secrets.token_hex(16)`.
+  3. Returns one-time `{items: [{port, secret_hex, cloak_domain,
+     full_secret}], inserted_ports, skipped_ports}` so operator can
+     pipe it into Ansible.
+- **Allocator**: `SELECT … WHERE status='FREE' AND scope='user'
+  ORDER BY port ASC FOR UPDATE SKIP LOCKED LIMIT 1`. Concurrent
+  allocators get distinct rows, no port collision possible.
+- **Statuses**:
+  - `FREE`   — pre-seeded, bound to a port, no `user_id`.
+  - `ACTIVE` — claimed by a user (`user_id` set).
+  - `REVOKED` — manually revoked by admin; the secret is dead and
+    its port stays *occupied* in DB (mtg still serves that secret
+    until admin restarts mtg with a new bootstrap).
+  - (legacy `ROTATED` kept in CHECK for back-compat with shared
+    rotate from Stage 8.)
+- **Per-user idempotency on issue**: if user has ACTIVE → return it.
+  Else allocate one FREE → set ACTIVE + user_id.
+- **Rotate** (`POST /admin/mtproto/users/{user_id}/rotate`,
+  superadmin): mark current ACTIVE → REVOKED, allocate fresh FREE
+  → ACTIVE. New port is whatever FREE was picked; old port is
+  burned (status=REVOKED) and no longer usable until next
+  bootstrap.
+  - Caveat: rotate consumes a FREE slot. Admin must re-bootstrap to
+    refill. Endpoint response includes `pool_free_remaining` so
+    operator sees pressure.
+- **Revoke** (`POST /admin/mtproto/users/{user_id}/revoke`,
+  superadmin): ACTIVE → REVOKED. No re-allocation. Pool free count
+  unchanged. Secret stays in mtg config until admin manually
+  removes it (recommended on bootstrap refresh).
+- **List** (`GET /admin/mtproto/users`, readonly+, paginated, status
+  filter). Never returns `secret_hex` / `full_secret`.
+- **Pool config dump** (`GET /admin/mtproto/pool/config`,
+  superadmin): returns ALL non-REVOKED secrets (FREE + ACTIVE) with
+  full material so operator can regenerate mtg `config.toml` for
+  every port. Audit-logged. Use case: rebuilding mtg-VPS from
+  scratch or after Ansible re-deploy.
+- **Pool exhaustion**: allocator finds no FREE → `503 pool_full`.
+  Bot surfaces RU message, admin gets the cue to bootstrap.
+- **Feature gate**: `API_MTG_PER_USER_ENABLED` (Stage 9 T2).
+  When off, scope=user → 501 `per_user_disabled`. Pool endpoints
+  remain reachable for admins (so they can prep the pool **before**
+  flipping the flag).
+- **Cloak per user**: each FREE row carries its own
+  `cloak_domain` set at bootstrap. Default = first item of
+  `mtg_cloak_domains`. Override via bootstrap payload.
+- **Audit**: actions `mtproto_pool_bootstrapped`,
+  `mtproto_user_allocated` (NEW — also written from
+  `/internal/mtproto/issue` because it's a mutating action),
+  `mtproto_user_rotated`, `mtproto_user_revoked`. Payloads carry
+  `port`, `cloak_domain`, `count`, `revoked_secret_id` only —
+  **never** `secret_hex` / `full_secret`.
 
-## Out of scope (defer to Stage 10+)
+## Out of scope (Stage 10+)
 
-- Auto-rebroadcast deeplinks to active users after rotation (bot-side
-  mass-DM worker). Stage 9 delivers backend only; operator manually
-  nudges via existing bot flow until then.
-- Cron auto-rotation on a schedule. Manual admin trigger only.
-- Multi-host sharding (all N containers on one host in Stage 9).
-- Admin UI page for mtg. Backend endpoints ship; frontend later.
+- Auto-rebroadcast deeplinks after rotation (bot mass-DM worker).
+- Cron auto-rotation.
+- Admin UI page for mtg.
+- Multi-host pool sharding (all N containers on one host).
+- Auto-Ansible-trigger from API (operator runs `make` after pool
+  changes).
 
-## Migration
-
-`api/alembic/versions/0005_stage9.py`:
+## Migration `0005_stage9.py`
 
 - `ALTER TABLE mtproto_secrets ADD COLUMN port INTEGER`.
-- `ALTER TABLE mtproto_secrets ADD CONSTRAINT mtproto_port_range CHECK
-  (port IS NULL OR (port BETWEEN 1 AND 65535))`.
-- `ALTER TABLE mtproto_secrets ADD CONSTRAINT
-  mtproto_user_port_consistency CHECK ((scope='shared' AND port IS
-  NULL) OR (scope='user' AND port IS NOT NULL))` — only on upgrade,
-  but since existing scope='user' rows never existed (Stage 8
-  returned 501 for that branch), the column defaults to NULL
-  everywhere and the CHECK is safe.
-- Two partial unique indexes:
-  - `ux_mtproto_user_active ON mtproto_secrets (user_id) WHERE
-    status='ACTIVE' AND scope='user'`.
-  - `ux_mtproto_user_port_active ON mtproto_secrets (port) WHERE
-    status='ACTIVE' AND scope='user'`.
+- `ALTER TABLE mtproto_secrets DROP CONSTRAINT mtproto_status_chk`,
+  re-create with `status IN ('ACTIVE','ROTATED','REVOKED','FREE')`.
+- New CHECK `mtproto_port_range`: `port IS NULL OR port BETWEEN 1
+  AND 65535`.
+- New CHECK `mtproto_user_port_consistency`: `(scope='shared' AND
+  port IS NULL) OR (scope='user' AND port IS NOT NULL)`.
+- New CHECK `mtproto_user_status_consistency`: `scope='shared' OR
+  status IN ('ACTIVE','REVOKED','FREE')` — keeps `ROTATED` away
+  from per-user rows.
+- New CHECK `mtproto_free_no_user`: `status<>'FREE' OR user_id IS
+  NULL`.
+- Drop existing CHECK `mtproto_scope_user_consistency` and re-create
+  to allow FREE rows: `(scope='shared' AND user_id IS NULL) OR
+  (scope='user' AND ((status='FREE' AND user_id IS NULL) OR
+  (status<>'FREE' AND user_id IS NOT NULL)))`.
+- Partial unique `ux_mtproto_user_active(user_id) WHERE
+  status='ACTIVE' AND scope='user'`.
+- Partial unique `ux_mtproto_port_live(port) WHERE status IN
+  ('ACTIVE','FREE') AND scope='user'` (one live secret per port —
+  REVOKED rows are tombstones, can coexist).
 
-## Config surface
+## Config surface (Stage 9 T2 already shipped)
 
 | Setting | Env | Default | Purpose |
 |---|---|---|---|
-| `mtg_per_user_enabled` | `API_MTG_PER_USER_ENABLED` | `false` | Feature flag for the whole stage. `false` → scope='user' returns 501 `per_user_disabled`. |
-| `mtg_per_user_pool_size` | `API_MTG_PER_USER_POOL_SIZE` | `16` | Size of port pool (containers 8443..8443+N-1). |
-| `mtg_per_user_port_base` | `API_MTG_PER_USER_PORT_BASE` | `8443` | First port. Shared secret stays on `mtg_port`; per-user starts here. |
+| `mtg_per_user_enabled` | `API_MTG_PER_USER_ENABLED` | `false` | Feature flag. |
+| `mtg_per_user_pool_size` | `API_MTG_PER_USER_POOL_SIZE` | `16` | Default `count` for bootstrap; advisory for monitoring. |
+| `mtg_per_user_port_base` | `API_MTG_PER_USER_PORT_BASE` | `8443` | Default `port_base` for bootstrap; first per-user port. |
 
 ## API surface (delta)
 
 ```
-POST /internal/mtproto/issue      # scope='user' now allocates (or reuses)
-POST /admin/mtproto/users/{uid}/rotate
-POST /admin/mtproto/users/{uid}/revoke
-GET  /admin/mtproto/users?limit=&offset=&status=
+POST /internal/mtproto/issue                # scope='user' → allocator
+POST /admin/mtproto/pool/bootstrap          # superadmin, idempotent
+GET  /admin/mtproto/pool/config             # superadmin, full secrets dump
+POST /admin/mtproto/users/{uid}/rotate      # superadmin
+POST /admin/mtproto/users/{uid}/revoke      # superadmin
+GET  /admin/mtproto/users                   # readonly+
 ```
 
-All admin endpoints require superadmin for mutating ops; list is
-`readonly+`.
+## Error codes (Stage 9 T2 already shipped)
 
-## Error codes
+- `PER_USER_DISABLED` (501) — feature flag off.
+- `POOL_FULL` (503) — allocator found no FREE.
 
-- `ApiCode.POOL_FULL = "pool_full"` — per-user pool exhausted (503).
-- `ApiCode.PER_USER_DISABLED = "per_user_disabled"` — feature flag off
-  (501). `NOT_IMPLEMENTED` is repurposed as generic, this is specific.
+## Task breakdown (revised)
 
-## Task breakdown
-
-| # | Task | Files |
+| # | Task | Status |
 |---|---|---|
-| T1 | Plan | `docs/plan-stage-9.md` |
-| T2 | Settings + error codes | `api/app/config.py`, `api/app/errors.py`, `api/.env.example` |
-| T3 | Alembic migration | `api/alembic/versions/0005_stage9.py` |
-| T4 | Model + allocator service | `api/app/models.py`, new `api/app/services/mtproto_allocator.py` |
-| T5 | Wire `/internal/mtproto/issue` scope='user' | `api/app/routers/mtproto.py` |
-| T6 | Admin per-user endpoints | `api/app/routers/admin/mtproto.py`, register in `api/app/main.py` |
-| T7 | Infra: compose `per-user-mtg` profile + ansible role stub | `docker-compose.dev.yml`, `mtg/config.template.toml` (new), `ansible/roles/mtg/` |
-| T8 | Tests | `api/tests/test_mtproto_allocator.py`, `api/tests/test_mtproto_issue.py` (extend), `api/tests/test_admin_mtproto.py` (extend) |
-| T9 | Docs | `CHANGELOG.md` `[0.9.0]`, `docs/ARCHITECTURE.md` §20, `README.md`, `api/README.md`, `mtg/README.md` |
+| T1 | Plan v1 | superseded |
+| T2 | Settings + error codes | done (`8f4aa55`) |
+| T3 | **Plan v2 (FREE-pool)** | this commit |
+| T4 | Alembic 0005 (port + FREE status + indexes + CHECKs) | next |
+| T5 | Model + allocator (SKIP LOCKED on FREE) + issue wiring | next |
+| T6 | Admin endpoints (list/rotate/revoke/bootstrap/pool-config) | next |
+| T7 | Infra: compose `per-user-mtg` profile + ansible mtg pool task | next |
+| T8 | Tests (allocator, issue, admin endpoints, migration semantics) | next |
+| T9 | Docs (CHANGELOG, ARCHITECTURE §20, READMEs) | next |
 
-## Allocator algorithm (T4)
+## Allocator algorithm (final)
 
 ```python
-async def allocate_user_secret(session, settings, user_id) -> MtprotoSecret:
-    async with session.begin_nested():  # caller holds the outer tx
-        # 1. Existing ACTIVE user-secret? Return it (idempotent issue).
-        existing = await session.scalar(
-            select(MtprotoSecret)
-            .where(
-                MtprotoSecret.scope == "user",
-                MtprotoSecret.user_id == user_id,
-                MtprotoSecret.status == "ACTIVE",
-            )
-            .with_for_update()
+async def allocate_user_secret(session, user_id) -> MtprotoSecret:
+    # 1. Idempotent: existing ACTIVE for this user.
+    existing = await session.scalar(
+        select(MtprotoSecret).where(
+            scope=='user', user_id==user_id, status=='ACTIVE'
         )
-        if existing is not None:
-            return existing
+    )
+    if existing:
+        return existing
 
-        # 2. Find free port: set(range(base, base+size)) - active_ports.
-        taken = set(
-            (await session.execute(
-                select(MtprotoSecret.port)
-                .where(
-                    MtprotoSecret.scope == "user",
-                    MtprotoSecret.status == "ACTIVE",
-                    MtprotoSecret.port.is_not(None),
-                )
-                .with_for_update()
-            )).scalars()
-        )
-        pool = range(settings.mtg_per_user_port_base,
-                     settings.mtg_per_user_port_base + settings.mtg_per_user_pool_size)
-        free = next((p for p in pool if p not in taken), None)
-        if free is None:
-            raise ApiError(503, POOL_FULL, "MTProto перегружен, повтори позже.")
+    # 2. Claim a FREE slot.
+    free = await session.scalar(
+        select(MtprotoSecret)
+        .where(scope=='user', status=='FREE')
+        .order_by(port.asc())
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if not free:
+        raise api_error(503, POOL_FULL, "MTProto перегружен …")
 
-        # 3. Insert new ACTIVE user-secret.
-        cloak = _pick_cloak(settings.mtg_cloak_domains, user_id)
-        fresh = MtprotoSecret(
-            secret_hex=secrets.token_hex(16),
-            cloak_domain=cloak,
-            scope="user",
-            user_id=user_id,
-            port=free,
-            status="ACTIVE",
-        )
-        session.add(fresh)
-        await session.flush()
-        return fresh
+    free.status = 'ACTIVE'
+    free.user_id = user_id
+    await session.flush()
+    return free
 ```
 
 ## Verification gates
 
 - AST parse all `api/**/*.py`.
 - `python -c "import yaml; yaml.safe_load(open('docker-compose.dev.yml'))"`.
-- `alembic upgrade head` **dry-check via AST only** (no DB in sandbox).
 - Type-escape audit clean.
-- Tests written, not run (same rule as Stage 8).
+- Tests written, not run.
