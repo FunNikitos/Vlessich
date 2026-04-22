@@ -61,6 +61,12 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 #     -d '{"count":4,"port_base":8444}'
 # Скармливаешь `items` в `./mtg/pool/{port}.toml` (см. mtg/README.md),
 # ставишь API_MTG_PER_USER_ENABLED=true, перезапускаешь api.
+# Stage 10 workers: `mtproto_rotator` (port 9102) и
+# `mtproto_broadcaster` (port 9103) поднимаются вместе с api; оба
+# master flags (API_MTG_AUTO_ROTATION_ENABLED / API_MTG_BROADCAST_ENABLED)
+# ship off. Rotator всё равно обновляет gauge
+# vlessich_mtproto_shared_secret_age_seconds на :9102. Bot endpoint
+# /internal/notify/mtproto_rotated слушает на порту 8081 (см. bot/.env).
 ```
 
 ## API surface

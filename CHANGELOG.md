@@ -7,6 +7,100 @@
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-04-22 — Stage 10: Auto-rebroadcast deeplinks + cron MTProto rotation
+
+### Architecture
+
+Закрывает «забыл ротировать» MTProto-риск и автоматизирует доставку
+обновлённого deeplink затронутым юзерам без ручного админ-action'а.
+
+Два новых worker'а на api-image:
+
+* `app.workers.mtproto_rotator` — раз в `API_MTG_ROTATOR_INTERVAL_SEC`
+  (default 1h) проверяет возраст ACTIVE shared MTProto секрета. Если
+  старше `API_MTG_SHARED_ROTATION_DAYS` (default 30) и
+  `API_MTG_AUTO_ROTATION_ENABLED=true` — повторяет логику
+  `POST /admin/mtproto/rotate` с `actor_type='system'` и публикует
+  событие в Redis stream `mtproto:rotated`. Метрики на
+  `127.0.0.1:9102` (`vlessich_mtproto_shared_secret_age_seconds`,
+  `vlessich_mtproto_auto_rotation_total`).
+* `app.workers.mtproto_broadcaster` — XREADGROUP по
+  `mtproto:rotated`. Резолвит затронутых пользователей (scope=user →
+  один tg_id; scope=shared → все ACTIVE/TRIAL подписчики) и для
+  каждого делает HMAC POST на bot-endpoint
+  `/internal/notify/mtproto_rotated`. Соблюдает Telegram-limits
+  (30 msg/s global, 1 msg/s per chat), idempotency (event_id × tg_id,
+  TTL 24h), cooldown 1h. Метрики на `127.0.0.1:9103`
+  (`vlessich_mtproto_broadcast_sent_total{status}`).
+
+В bot'е добавлен второй aiohttp app параллельно polling/webhook'у на
+`BOT_INTERNAL_NOTIFY_PORT` (default 8081). Endpoint валидирует HMAC
+тем же `BOT_API_INTERNAL_SECRET`, что Bot↔API (clock-skew ≤60s),
+fetch'ит свежий deeplink через существующий ApiClient и DM'ит юзеру
+шаблоном `MTPROTO_ROTATED`. Любая ошибка (Telegram API, backend) →
+200 `{status: skipped}` чтобы broadcaster не ретраил вечно (idempotency
+уже захвачена).
+
+Admin-routes `POST /admin/mtproto/rotate` и `POST /admin/mtproto/users/{uid}/rotate`
+теперь best-effort emit'ят rotation event в Redis-stream при включённом
+`API_MTG_BROADCAST_ENABLED` (failure не валит ротацию).
+
+Подробнее — `docs/plan-stage-10.md`, `docs/ARCHITECTURE.md` §22.
+
+### Added
+
+- `app.services.mtproto_broadcast` — Redis token-bucket RL,
+  cooldown/idempotency primitives, `emit_rotation_event(...)`,
+  `ensure_consumer_group(...)`.
+- `app.workers.mtproto_rotator` — cron auto-rotation loop с
+  Prometheus exporter'ом 9102.
+- `app.workers.mtproto_broadcaster` — broadcast consumer + bot HMAC
+  POST с Prometheus exporter'ом 9103.
+- `bot/app/notify_server.py` — aiohttp app, endpoint
+  `/internal/notify/mtproto_rotated`. Wired-up в `main.run` параллельно
+  polling/webhook'у; cleanup в finally.
+- `bot/app/texts.py::MTPROTO_ROTATED` — шаблон DM с обновлённым
+  deeplink'ом.
+- Settings:
+  - `API_MTG_AUTO_ROTATION_ENABLED` (default off),
+    `API_MTG_SHARED_ROTATION_DAYS=30`, `API_MTG_ROTATOR_INTERVAL_SEC=3600`.
+  - `API_MTG_BROADCAST_ENABLED` (default off),
+    `API_MTG_BROADCAST_COOLDOWN_SEC=3600`,
+    `API_MTG_BROADCAST_IDEMPOTENCY_TTL_SEC=86400`,
+    `API_MTG_BROADCAST_RL_GLOBAL_PER_SEC=30`,
+    `API_MTG_BROADCAST_RL_PER_CHAT_SEC=1`,
+    `API_MTG_BROADCAST_STREAM_MAXLEN=10000`,
+    `API_MTG_BROADCAST_BOT_NOTIFY_URL=http://bot:8081/internal/notify/mtproto_rotated`.
+  - `BOT_INTERNAL_NOTIFY_ENABLED=true`, `BOT_INTERNAL_NOTIFY_HOST=0.0.0.0`,
+    `BOT_INTERNAL_NOTIFY_PORT=8081`,
+    `BOT_INTERNAL_NOTIFY_PATH=/internal/notify/mtproto_rotated`.
+- `ApiCode.BROADCAST_FAILED`, `ApiCode.NOTIFICATION_DISABLED`.
+- Metrics: `vlessich_mtproto_broadcast_sent_total{status}`,
+  `vlessich_mtproto_auto_rotation_total{result}`,
+  `vlessich_mtproto_shared_secret_age_seconds`.
+- Alert rules: `MtprotoSharedSecretStale`, `MtprotoBroadcastFailures`.
+- AuditLog actions: `mtproto_auto_rotated` (rotator),
+  broadcast outcomes via Prometheus counters (audit-log не пишется
+  на каждое DM чтобы не раздуть таблицу — telemetry через метрики).
+
+### Tests
+
+- `api/tests/test_mtproto_broadcast_service.py` — Redis-gated
+  (`VLESSICH_INTEGRATION_REDIS=...`): emit shape, idempotency atomicity,
+  release, cooldown, RL per-chat floor + global ceiling rollback.
+- `api/tests/test_mtproto_rotator.py` — DB-gated: skipped/disabled/young/
+  rotated states, AuditLog `mtproto_auto_rotated` shape (actor=system).
+- `bot/tests/test_notify_server.py` — pure aiohttp TestServer, без
+  external deps: HMAC verify (valid/skewed/bad), payload validation
+  (scope/tg_id), DM dispatch через монки-fake.
+
+### Rollout
+
+Оба master flags off по умолчанию. Включать в порядке:
+broadcaster → manual rotate smoke-test → broadcast flag on → 24h
+soak → auto-rotation flag on. Rollback — снять оба flags;
+worker-контейнеры остаются запущенными вхолостую.
+
 ## [0.9.0] — 2026-04-22 — Stage 9: Per-User MTProto Secrets (FREE-pool model)
 
 ### Architecture

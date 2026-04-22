@@ -16,6 +16,10 @@ uvicorn app.main:app --reload --port 8000
 - `python -m app.workers.reminders` — напоминания об окончании подписки.
 - `python -m app.workers.prober` — active probing + BURN/RECOVER state
   machine (см. `docs/ARCHITECTURE.md` §16).
+- `python -m app.workers.mtproto_rotator` — cron auto-rotation shared
+  MTProto секрета (Stage 10, off by default; см. ARCHITECTURE §22).
+- `python -m app.workers.mtproto_broadcaster` — DM broadcaster новых
+  deeplink'ов после ротации (Stage 10, off by default).
 
 ## Endpoints
 
@@ -68,6 +72,16 @@ uvicorn app.main:app --reload --port 8000
 | `API_MTG_PER_USER_ENABLED` | `false` | Stage 9 feature gate. Off → `/internal/mtproto/issue scope='user'` → 501 `per_user_disabled`. On → allocator берёт FREE из pool, 503 `pool_full` если пусто. |
 | `API_MTG_PER_USER_POOL_SIZE` | `16` | Default `count` для `/admin/mtproto/pool/bootstrap` (1..512). |
 | `API_MTG_PER_USER_PORT_BASE` | `8443` | Default `port_base` для bootstrap (1..65535). Pool занимает `[port_base, port_base + pool_size)`. |
+| `API_MTG_AUTO_ROTATION_ENABLED` | `false` | Stage 10 cron-rotator master flag. Off → rotator работает, но только обновляет gauge. On → ротирует ACTIVE shared при возрасте ≥ `MTG_SHARED_ROTATION_DAYS`. |
+| `API_MTG_SHARED_ROTATION_DAYS` | `30` | Порог возраста (дни) для авто-ротации shared. |
+| `API_MTG_ROTATOR_INTERVAL_SEC` | `3600` | Период tick'ов `mtproto_rotator`. |
+| `API_MTG_BROADCAST_ENABLED` | `false` | Stage 10 broadcaster master flag. Off → emit + consume no-op (контейнер idle). On → admin/rotator emit'ят в Redis stream, broadcaster DM'ит затронутых юзеров через bot endpoint. |
+| `API_MTG_BROADCAST_COOLDOWN_SEC` | `3600` | Минимум секунд между двумя DM одному tg_id. |
+| `API_MTG_BROADCAST_IDEMPOTENCY_TTL_SEC` | `86400` | TTL `(event_id, tg_id)` idempotency маркера. |
+| `API_MTG_BROADCAST_RL_GLOBAL_PER_SEC` | `30` | Глобальный rate-limit (Telegram ceiling 30 msg/s). |
+| `API_MTG_BROADCAST_RL_PER_CHAT_SEC` | `1` | Минимум секунд между сообщениями одному чату. |
+| `API_MTG_BROADCAST_STREAM_MAXLEN` | `10000` | Approximate MAXLEN для `mtproto:rotated` XADD. |
+| `API_MTG_BROADCAST_BOT_NOTIFY_URL` | `http://bot:8081/internal/notify/mtproto_rotated` | Bot endpoint для HMAC POST. |
 
 ## Миграции
 

@@ -1110,3 +1110,181 @@ regenerate mtg config → redeploy / `systemctl restart mtg@*`.
 - Multi-host sharding (N VPS × M ports per VPS).
 
 
+## 22. MTProto Auto-Rotation & Broadcast (Stage 10)
+
+### Проблема
+
+Stage 8 даёт ручной `POST /admin/mtproto/rotate`, Stage 9 — ручной
+`POST /admin/mtproto/users/{uid}/rotate`. Что не закрыто:
+
+1. «Забыл ротировать» — shared секрет может прожить год без ротации.
+2. После любой ротации старый deeplink у юзера в Telegram-клиенте
+   перестаёт работать; нужно явно довести новый. До Stage 10 это
+   делалось вручную (admin → users → выкатил объявление).
+
+Stage 10 закрывает оба пункта.
+
+### Архитектура
+
+```
+                ┌─────────── API process ──────────────┐
+admin POST      │ admin.mtproto.rotate / rotate_user  │
+                │   commit                             │
+                │   if mtg_broadcast_enabled:          │
+                │     emit_rotation_event(...)         │
+                └─────────────┬────────────────────────┘
+                              │
+                ┌─────────────▼─────────── api worker container ─┐
+cron tick (1h)  │ mtproto_rotator                                │
+                │   - SELECT ACTIVE shared                       │
+                │   - if age >= mtg_shared_rotation_days         │
+                │       and mtg_auto_rotation_enabled:           │
+                │       _rotate_shared_in_tx + emit              │
+                │   - update gauge                               │
+                │   :9102 vlessich_mtproto_shared_secret_age_*   │
+                └────────────────────────┬───────────────────────┘
+                                         │
+                          Redis stream `mtproto:rotated`
+                          XADD MAXLEN ~ 10000
+                                         │
+                ┌────────────────────────▼─────────── api worker container ─┐
+                │ mtproto_broadcaster                                       │
+                │   XREADGROUP group=broadcast consumer=broadcaster-1       │
+                │   per event:                                              │
+                │     resolve recipients                                    │
+                │       scope=user   -> [tg_id]                             │
+                │       scope=shared -> SELECT DISTINCT user_id FROM        │
+                │                       subscriptions                       │
+                │                       WHERE status IN (ACTIVE, TRIAL)     │
+                │     per chat:                                             │
+                │       SETNX idem (event_id × tg_id, TTL 24h)              │
+                │       skip if cooldown (1h) marker                        │
+                │       acquire RL slot (30/s global + 1/s per chat)        │
+                │       HMAC POST bot/internal/notify/mtproto_rotated       │
+                │       on 2xx: mark cooldown                               │
+                │       on 5xx/network: release idem + break                │
+                │   XACK on success or skip; partial -> re-deliver next     │
+                │   :9103 vlessich_mtproto_broadcast_sent_total{status}     │
+                └────────────────────────┬──────────────────────────────────┘
+                                         │ HTTP HMAC POST
+                                         ▼
+                ┌─────────── bot container ─────────────┐
+                │ aiohttp app on $BOT_INTERNAL_NOTIFY_*  │
+                │ POST /internal/notify/mtproto_rotated │
+                │   - verify HMAC + 60s skew            │
+                │   - api.get_mtproto(tg_id, scope)     │
+                │   - bot.send_message(tg_id, text)     │
+                │   - any error -> 200 {status:skipped} │
+                └───────────────────────────────────────┘
+```
+
+### Affected-user resolution
+
+`scope='user'` события несут конкретный `user_id` — broadcaster шлёт
+ровно один DM. `scope='shared'` событие шлёт DM каждому юзеру с
+ACTIVE/TRIAL подпиской: точная таблица «кто получал shared deeplink»
+не ведётся (deferred), но активные подписчики — это и есть аудитория
+shared MTProto.
+
+Альтернатива (отложена): отдельная таблица `mtproto_issue_log` —
+лишняя миграция и query-слой ради ~10% точности; в Stage 10 явно
+out-of-scope.
+
+### Idempotency / cooldown / RL
+
+Все маркеры в Redis под namespace `mtproto_broadcast:`:
+
+- `idem:{event_id}:{tg_id}` — `SET NX` с TTL
+  `mtg_broadcast_idempotency_ttl_sec` (default 24h). Гарантирует
+  «один и тот же event один раз на чат».
+- `cooldown:{tg_id}` — после успешной отправки. TTL
+  `mtg_broadcast_cooldown_sec` (default 1h). Защищает юзера от
+  потока DM при последовательных ротациях.
+- `rl:global:{epoch_sec}` — счётчик INCR с TTL 2s. Кап
+  `mtg_broadcast_rl_global_per_sec` (max 30 = Telegram-ceiling).
+- `rl:chat:{tg_id}` — `SET NX` с TTL `mtg_broadcast_rl_per_chat_sec`
+  (default 1).
+
+Если global ceiling выбран — broadcaster откатывает per-chat lock
+(удаляет `rl:chat:{tg_id}`), не XACK'ает event и переходит к
+следующему tick'у. Per-chat lock без отката — естественный sleep между
+сообщениями одному и тому же чату.
+
+### Bot endpoint contract
+
+```
+POST {BOT_INTERNAL_NOTIFY_PATH}
+Headers:
+  x-vlessich-ts:  unix-seconds (clock skew ≤ 60s)
+  x-vlessich-sig: hex(HMAC_SHA256(API_INTERNAL_SECRET,
+                       "POST\n{path}\n{ts}\n" + body))
+  content-type:   application/json
+
+Body:
+{
+  "event_id":   "abc...hex",
+  "scope":      "shared" | "user",
+  "tg_id":      12345,
+  "emitted_at": "2026-..."
+}
+
+Responses:
+  200 {"status":"ok"}      — DM отправлен.
+  200 {"status":"skipped"} — DM не отправлен (api 4xx, Telegram error,
+                              etc.) — broadcaster НЕ ретраит.
+  400                      — payload невалиден (broadcaster логирует +
+                              XACK'ает; это poison-message).
+  401                      — bad signature / clock skew.
+  503 notification_disabled — bot's BOT_INTERNAL_NOTIFY_ENABLED=false.
+```
+
+Принципиально: bot НЕ принимает deeplink в payload — fetch'ит свежий
+через api_client. Это:
+- единая source-of-truth (нет рассинхронизации между API и сообщением);
+- secret material не светится в логах broadcaster'а;
+- одна точка контроля контента DM (bot strings, не API).
+
+### Settings (env `API_*` / `BOT_*`)
+
+См. таблицы в `docs/plan-stage-10.md` §"Locked settings". Оба master
+flags — `API_MTG_AUTO_ROTATION_ENABLED` и `API_MTG_BROADCAST_ENABLED` —
+ship **off**. Включение поэтапно: broadcaster on → manual rotate
+smoke-test → broadcast on → 24h soak → auto-rotation on.
+
+### Audit & metrics
+
+AuditLog actions:
+
+- `mtproto_auto_rotated` — actor_type='system', target_type='mtproto_secret',
+  payload `{cloak_domain, revoked_secret_id, age_sec}`. Без secret material.
+
+Per-DM в AuditLog не пишем (tens of thousands rows / cycle на
+shared-rotation бесполезно раздуют таблицу). Telemetry — Prometheus.
+
+Prometheus:
+
+- `vlessich_mtproto_broadcast_sent_total{status}` (Counter) — статусы:
+  `ok | failed | cooldown | duplicate | throttled`.
+- `vlessich_mtproto_auto_rotation_total{result}` (Counter) — `rotated |
+  skipped | error`.
+- `vlessich_mtproto_shared_secret_age_seconds` (Gauge) —
+  apдейтится rotator'ом каждый tick.
+
+Alert rules (`infra/prometheus/rules/vlessich.yml`):
+
+- `MtprotoSharedSecretStale` — gauge > 36 days for 1h. Означает: rotator
+  упал, либо master flag off, либо ошибки molча (см.
+  `auto_rotation_total{result="error"}`).
+- `MtprotoBroadcastFailures` — `rate(...{status="failed"}[15m]) > 0.1`
+  for 15m. Означает: bot endpoint недоступен или возвращает 4xx/5xx.
+
+### Что НЕ в этом этапе
+
+- Per-user cron auto-rotation (only manual via admin endpoint).
+- `mtproto_issue_log` — точная аудитория shared deeplinks.
+- Mini-App «MTProto rotated» banner (DM Telegram-only).
+- Retry-after-X queue для bounced DM.
+- Multi-broadcaster horizontal scale (consumer group уже создан, но
+  второй consumer не нужен на текущем объёме).
+
+

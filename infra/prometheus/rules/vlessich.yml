@@ -99,3 +99,32 @@ groups:
           description: |
             Prometheus cannot scrape mtg /metrics (127.0.0.1:9410).
             Telegram users will lose MTProto access until mtg recovers.
+
+      - alert: MtprotoSharedSecretStale
+        expr: vlessich_mtproto_shared_secret_age_seconds > 3110400
+        for: 1h
+        labels:
+          severity: warning
+          service: mtproto_rotator
+        annotations:
+          summary: "Shared MTProto secret not rotated in 36+ days"
+          description: |
+            Age gauge is {{ $value | humanizeDuration }}. Either the
+            rotator worker is down, API_MTG_AUTO_ROTATION_ENABLED is
+            false, or the rotator has been failing silently. Check
+            the `mtproto_rotator` container logs and
+            `vlessich_mtproto_auto_rotation_total{result="error"}`.
+
+      - alert: MtprotoBroadcastFailures
+        expr: rate(vlessich_mtproto_broadcast_sent_total{status="failed"}[15m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          service: mtproto_broadcaster
+        annotations:
+          summary: "MTProto broadcast failure rate elevated"
+          description: |
+            > 0.1 failed broadcast per second over 15m. Likely bot
+            `/internal/notify/mtproto_rotated` unreachable or
+            returning 4xx/5xx consistently. Check broadcaster logs
+            and bot notify endpoint reachability.
