@@ -59,3 +59,11 @@ MTPROTO_BLOCK = (
     "Хост: <code>{host}</code>\n"
     "Порт: <code>{port}</code>"
 )
+
+MTPROTO_ROTATED = (
+    "🔄 MTProto-прокси обновлён\n\n"
+    "Мы обновили секрет. Добавь новый прокси в Telegram:\n"
+    "{deeplink}\n\n"
+    "Хост: <code>{host}</code>\n"
+    "Порт: <code>{port}</code>"
+)

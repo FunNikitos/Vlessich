@@ -18,6 +18,7 @@ from app.config import Settings, get_settings
 from app.handlers import router as root_router
 from app.logging import log, setup_logging
 from app.middlewares.throttling import ThrottlingMiddleware
+from app.notify_server import start_notify_server
 
 SHUTDOWN_TIMEOUT: Final = 10.0
 
@@ -51,12 +52,17 @@ async def run() -> None:
     dp = build_dispatcher(settings, redis)
 
     log.info("bot.start", env=settings.env, mode="webhook" if settings.use_webhook else "polling")
+    notify_runner = None
+    if settings.internal_notify_enabled:
+        notify_runner = await start_notify_server(settings=settings, bot=bot)
     try:
         if settings.use_webhook:
             await _run_webhook(bot, dp, settings)
         else:
             await _run_polling(bot, dp)
     finally:
+        if notify_runner is not None:
+            await asyncio.wait_for(notify_runner.cleanup(), timeout=SHUTDOWN_TIMEOUT)
         await bot.session.close()
         await redis.aclose()
         log.info("bot.stop")
