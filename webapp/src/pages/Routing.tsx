@@ -15,15 +15,18 @@ export function RoutingPage() {
     next: boolean,
   ) {
     if (!data) return;
+    const baseline: SubscriptionResponse = data;
     setBusy(field);
     setToggleError(null);
-    const optimistic: SubscriptionResponse = { ...data, [field]: next };
+    const optimistic: SubscriptionResponse = { ...baseline, [field]: next };
     try {
       await mutate(SUBSCRIPTION_KEY, api.toggleRouting({ [field]: next }), {
         optimisticData: optimistic,
         rollbackOnError: true,
-        populateCache: (result, current) =>
-          current ? { ...current, ...result } : current,
+        populateCache: (result, current) => ({
+          ...(current ?? baseline),
+          ...result,
+        }),
         revalidate: false,
       });
     } catch (e) {

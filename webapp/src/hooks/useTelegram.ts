@@ -1,18 +1,5 @@
 import { useEffect } from "react";
-
-interface TelegramWebApp {
-  ready: () => void;
-  expand: () => void;
-  setHeaderColor: (c: string) => void;
-  setBackgroundColor: (c: string) => void;
-  initData: string;
-}
-
-declare global {
-  interface Window {
-    Telegram?: { WebApp?: TelegramWebApp };
-  }
-}
+import type { TelegramWebApp } from "@/lib/telegram";
 
 /** Initialize Telegram Mini-App SDK and apply Spotify-dark theme. */
 export function useTelegram(): TelegramWebApp | null {

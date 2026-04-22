@@ -1,22 +1,5 @@
 /** Helpers to read Telegram WebApp runtime data (initData, start_param, user). */
-
-interface TelegramWebApp {
-  ready: () => void;
-  expand: () => void;
-  setHeaderColor: (c: string) => void;
-  setBackgroundColor: (c: string) => void;
-  initData: string;
-  initDataUnsafe: {
-    user?: { id: number; username?: string; first_name?: string };
-    start_param?: string;
-  };
-}
-
-declare global {
-  interface Window {
-    Telegram?: { WebApp?: TelegramWebApp };
-  }
-}
+import type { TelegramWebApp } from "./telegram";
 
 export function getWebApp(): TelegramWebApp | null {
   return window.Telegram?.WebApp ?? null;
@@ -39,5 +22,8 @@ export function getTelegramUser():
   | null {
   const u = getWebApp()?.initDataUnsafe?.user;
   if (!u) return null;
-  return { id: u.id, username: u.username, firstName: u.first_name };
+  const out: { id: number; username?: string; firstName?: string } = { id: u.id };
+  if (u.username !== undefined) out.username = u.username;
+  if (u.first_name !== undefined) out.firstName = u.first_name;
+  return out;
 }

@@ -32,7 +32,7 @@
 set -Eeuo pipefail
 
 # ---------- constants & helpers ----------
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" &> /dev/null && pwd 2>/dev/null || pwd)"
 LIB_DIR="${SCRIPT_DIR}/lib"
 
 VLESSICH_DIR="${VLESSICH_DIR:-/opt/vlessich}"
