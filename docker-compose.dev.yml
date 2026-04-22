@@ -88,6 +88,44 @@ services:
     ports:
       - "127.0.0.1:9101:9101"
 
+  # MTProto cron auto-rotator (Stage 10). Every API_MTG_ROTATOR_INTERVAL_SEC
+  # checks ACTIVE shared secret age; rotates if older than
+  # API_MTG_SHARED_ROTATION_DAYS (default 30) and master flag on.
+  # Exports vlessich_mtproto_shared_secret_age_seconds on :9102.
+  mtproto_rotator:
+    build: ./api
+    restart: unless-stopped
+    env_file: ./api/.env.dev
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.mtproto_rotator
+    ports:
+      - "127.0.0.1:9102:9102"
+
+  # MTProto rotation broadcaster (Stage 10). Consumes mtproto:rotated
+  # Redis stream and DMs each affected user via bot's
+  # /internal/notify/mtproto_rotated endpoint (HMAC). Idle when
+  # API_MTG_BROADCAST_ENABLED=false. Exports
+  # vlessich_mtproto_broadcast_sent_total on :9103.
+  mtproto_broadcaster:
+    build: ./api
+    restart: unless-stopped
+    env_file: ./api/.env.dev
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+      bot:   { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.mtproto_broadcaster
+    ports:
+      - "127.0.0.1:9103:9103"
+
   webapp:
     build:
       context: ./webapp
