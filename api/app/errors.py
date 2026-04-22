@@ -40,6 +40,14 @@ class ApiCode(StrEnum):
     POOL_FULL = "pool_full"
     BROADCAST_FAILED = "broadcast_failed"
     NOTIFICATION_DISABLED = "notification_disabled"
+    BILLING_DISABLED = "billing_disabled"
+    INVALID_PLAN = "invalid_plan"
+    ORDER_NOT_FOUND = "order_not_found"
+    ORDER_NOT_PENDING = "order_not_pending"
+    ORDER_NOT_PAID = "order_not_paid"
+    ORDER_ALREADY_REFUNDED = "order_already_refunded"
+    PAYMENT_AMOUNT_MISMATCH = "payment_amount_mismatch"
+    PAYMENT_VERIFICATION_FAILED = "payment_verification_failed"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:

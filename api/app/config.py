@@ -151,6 +151,25 @@ class Settings(BaseSettings):
         description="Bot HTTP endpoint that broadcaster calls with HMAC-signed payload.",
     )
 
+    # Stage 11: Billing / Payments (Telegram Stars). Off by default;
+    # enable per-env after smoke-testing in staging. Master flag gates
+    # internal payments endpoints + bot /buy menu (separate flag in
+    # bot/.env).
+    billing_enabled: bool = Field(
+        default=False,
+        description="Master switch for billing endpoints and bot /buy flow.",
+    )
+    billing_plan_ttl_pending_sec: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="TTL for PENDING orders; cleaned up on next create_order for the same user.",
+    )
+    billing_refund_bot_notify_url: str = Field(
+        default="http://bot:8081/internal/refund/star_payment",
+        description="Bot endpoint that performs bot.refund_star_payment(...) on HMAC POST.",
+    )
+
     # Telegram
     bot_token: SecretStr | None = None  # для серверной валидации Mini-App initData
 
