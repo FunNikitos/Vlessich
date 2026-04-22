@@ -78,6 +78,10 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `POST /internal/codes/activate`   | HMAC (§11A) | Активация кода (из бота)                        |
 | `POST /internal/trials`           | HMAC        | Выдача триала                                   |
 | `POST /internal/mtproto/issue`    | HMAC        | Выдача MTProto-секрета                          |
+| `POST /internal/payments/plans`   | HMAC        | Billing: список активных SKU (Stage 11)         |
+| `POST /internal/payments/create_order` | HMAC   | Billing: PENDING order перед send_invoice        |
+| `POST /internal/payments/precheck`| HMAC        | Billing: валидация pre_checkout_query            |
+| `POST /internal/payments/success` | HMAC        | Billing: финализация successful_payment          |
 | `GET  /internal/sub/{token}`      | HMAC        | sub-Worker → backend (inbounds[] payload)       |
 | `POST /admin/auth/login`          | —           | Admin JWT login                                 |
 | `GET  /admin/stats`               | JWT         | Dashboard сводка (users/codes/subs/nodes)       |
@@ -91,6 +95,9 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `POST /admin/mtproto/users/{uid}/rotate` | JWT superadmin | REVOKE + claim fresh FREE per-user секрет (Stage 9, gated) |
 | `POST /admin/mtproto/users/{uid}/revoke` | JWT superadmin | Mark per-user ACTIVE → REVOKED                              |
 | `GET  /admin/mtproto/users`              | JWT readonly+  | Paginated per-user secrets list (metadata only)             |
+| `GET  /admin/orders`                     | JWT readonly+  | Stage 11: list orders (filters: status, user_id)             |
+| `GET  /admin/orders/{id}`                | JWT readonly+  | Stage 11: order detail                                       |
+| `POST /admin/orders/{id}/refund`         | JWT superadmin | Stage 11: two-phase refund (bot HMAC push + DB transition)  |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (user + sub summary)         |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
 | `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |

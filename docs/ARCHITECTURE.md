@@ -1288,3 +1288,136 @@ Alert rules (`infra/prometheus/rules/vlessich.yml`):
   второй consumer не нужен на текущем объёме).
 
 
+
+
+## 23. Billing / Telegram Stars (Stage 11)
+
+### Цель
+
+Прямые покупки подписки через Telegram Stars (`currency='XTR'`,
+`provider_token=''`). Закрывает revenue gap: до Stage 11 единственный
+способ оплаты — заранее выпущенный activation code. Auto-renewal
+не реализован (one-time purchase, переиспользуем reminders 24h/6h/1h).
+
+### Состояние заказа (Order)
+
+```
+(none) ── create_order ──▶ PENDING
+                          ├── precheck (mismatch) ──▶ PaymentAmountMismatch
+                          ├── precheck (stale)    ──▶ no transition
+                          ├── mark_paid (ok)      ──▶ PAID
+                          ├── mark_paid (mismatch)──▶ FAILED
+                          └── (TTL expired + new create_order) ──▶ FAILED
+
+PAID ── refund (admin two-phase) ──▶ REFUNDED
+```
+
+* Partial unique index `ix_orders_one_pending_per_user` гарантирует
+  максимум 1 живой PENDING на `user_id`.
+* Partial unique index `ix_orders_telegram_charge_id` блокирует
+  двойное проведение одного Telegram charge id.
+* `mark_paid` идемпотентен: replay с тем же charge id возвращает
+  существующее `(subscription_id, expires_at)`.
+
+### Связь Order ↔ Subscription
+
+`Subscription.last_order_id` указывает на последний оплативший order.
+Используется только для refund-логики (см. ниже). Сам `Subscription`
+переиспользуется (продлевается); каждая успешная покупка обновляет
+`expires_at = max(expires_at, now) + plan.duration_days` и стампит
+`last_order_id = order.id`.
+
+### Provisioning (Remnawave)
+
+`mark_paid` синхронно вызывает Remna в той же транзакции:
+* Новая sub → `remna.create_user(sub_id, plan, days)` → берём
+  `sub_url_token` + `remna_user_id`.
+* Существующая sub с `remna_user_id` → `remna.extend_user(...)`.
+* Существующая sub без `remna_user_id` (legacy / EXPIRED revival) →
+  `create_user` + attach.
+
+Любой Remna-failure → транзакция откатывается, бот вернёт 5xx,
+Telegram повторит `successful_payment`. Idempotency-lock —
+`Order.telegram_payment_charge_id` (UNIQUE WHERE NOT NULL,
+проставляется только при PAID).
+
+### Refund (admin-only, two-phase)
+
+Bot-процесс — единственный держатель Bot token, поэтому admin API
+делегирует Telegram-вызов боту по HMAC.
+
+```
+Admin UI ──POST /admin/orders/{id}/refund──▶ API
+                                              │
+                                              ├─ pre-flight: order PAID + charge_id present
+                                              │
+                                              ├─POST /internal/refund/star_payment ──▶ Bot
+                                              │     (HMAC API_INTERNAL_SECRET)         │
+                                              │                                        │
+                                              │                       bot.refund_star_payment(...)
+                                              │                       Telegram returns ok
+                                              │                                        │
+                                              │◀──── 200 ──────────────────────────────┘
+                                              │
+                                              ├─ DB transaction:
+                                              │    Order.PAID → REFUNDED
+                                              │    if Subscription.last_order_id == order.id:
+                                              │       Subscription.status = REVOKED
+                                              │       Subscription.last_order_id = NULL
+                                              │
+                                              └─ AuditLog actor_type='admin'
+                                                   action='order_refunded'
+                                                   payload.subscription_revoked: bool
+                                                                                
+                                              ─────▶ Bot DM REFUND_NOTICE (best-effort, fire-and-forget)
+```
+
+* Если бот вернул не-2xx → 502 `payment_verification_failed`,
+  state в БД не меняется, админ может ретраить.
+* Если bot-фаза прошла, но DB-фаза упала → 500
+  (charge уже возвращён в Telegram; админ согласовывает вручную
+  по audit_log + bot logs). На практике — недостижимо в одной
+  транзакции с pre-flight'ом.
+* Overlap: если после рефанд-таргет-order'а пользователь оплатил
+  следующий order (`last_order_id` сместился), refund не отзывает
+  sub — отзывается только «перекрытая» оплата.
+
+### Endpoints
+
+| Path                                  | Auth         | Назначение                                         |
+|---------------------------------------|--------------|----------------------------------------------------|
+| `POST /internal/payments/plans`       | HMAC         | Список активных SKU                                |
+| `POST /internal/payments/create_order`| HMAC         | Issue PENDING order перед `send_invoice`           |
+| `POST /internal/payments/precheck`    | HMAC         | Валидация pre_checkout_query                       |
+| `POST /internal/payments/success`     | HMAC         | Финализация после `successful_payment`             |
+| `GET  /admin/orders`                  | JWT readonly+| Paginated list (status / user_id filters)          |
+| `GET  /admin/orders/{id}`             | JWT readonly+| Detail                                             |
+| `POST /admin/orders/{id}/refund`      | JWT super    | Two-phase refund                                   |
+| `POST /internal/refund/star_payment`  | HMAC (bot)   | API → bot, выполняет `bot.refund_star_payment`     |
+
+### Метрики / Алерты
+
+* `vlessich_orders_total{status,plan}` — created/paid/refunded.
+* `vlessich_revenue_xtr_total{plan}` — суммарный приход в XTR.
+* `vlessich_refunds_total{plan}` — счётчик возвратов.
+* Alerts (`vlessich.billing`):
+  * `OrderFailureSpike` — `rate(orders_total{status="failed"}[5m]) > 0.1` за 10m.
+  * `RefundVolumeHigh` — `rate(refunds_total[15m]) > 0.05` за 1h.
+
+### Feature flags
+
+* `API_BILLING_ENABLED` (default `false`) — мастер-флаг. Off →
+  router возвращает `409 billing_disabled`.
+* `BOT_BILLING_ENABLED` (default `false`) — скрывает /buy + кнопку
+  «💎 Купить подписку» в главном меню.
+* `API_BILLING_PLAN_TTL_PENDING_SEC` (default `900`) — TTL для
+  cleanup stale PENDING.
+
+### Известные ограничения
+
+* `billing.refund` не вызывает `remna.revoke_user(...)` — consistent
+  с текущим `admin/subscriptions.revoke`. Унификация — отдельной
+  задачей.
+* Auto-renewal отсутствует (manual repurchase).
+* Только Telegram Stars (XTR). Поля `currency` существуют для
+  будущих провайдеров (CryptoBot / YooKassa), но enforce'ится `XTR`.

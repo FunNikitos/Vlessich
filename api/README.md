@@ -30,6 +30,10 @@ uvicorn app.main:app --reload --port 8000
 | `POST /internal/codes/activate`   | HMAC (§11A) | Активация кода (из бота)                        |
 | `POST /internal/trials`           | HMAC        | Выдача триала                                   |
 | `POST /internal/mtproto/issue`    | HMAC        | Выдача MTProto-секрета                          |
+| `POST /internal/payments/plans`   | HMAC        | Billing: список активных SKU (Stage 11)         |
+| `POST /internal/payments/create_order` | HMAC   | Billing: PENDING order                           |
+| `POST /internal/payments/precheck`| HMAC        | Billing: pre_checkout_query                      |
+| `POST /internal/payments/success` | HMAC        | Billing: финализация (mark_paid + Remna)         |
 | `GET  /internal/sub/{token}`      | HMAC        | sub-Worker → backend (edge subscription)        |
 | `POST /admin/auth/login`          | —           | Admin JWT login                                 |
 | `GET  /admin/stats`               | JWT         | Dashboard сводка                                |
@@ -43,6 +47,9 @@ uvicorn app.main:app --reload --port 8000
 | `POST /admin/mtproto/users/{uid}/rotate` | JWT superadmin | REVOKE + claim fresh FREE (Stage 9, gated)                   |
 | `POST /admin/mtproto/users/{uid}/revoke` | JWT superadmin | Mark ACTIVE → REVOKED                                         |
 | `GET  /admin/mtproto/users`              | JWT readonly+  | Paginated per-user list (metadata only)                       |
+| `GET  /admin/orders`                     | JWT readonly+  | Stage 11: list orders (status/user_id filters)                |
+| `GET  /admin/orders/{id}`                | JWT readonly+  | Stage 11: order detail                                        |
+| `POST /admin/orders/{id}/refund`         | JWT superadmin | Stage 11: two-phase refund (bot HMAC push + DB transition)    |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap                              |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: подписка + sub-URLs + devices         |
 | `POST /v1/webapp/subscription/toggle` | initData | adblock / smart_routing toggle                  |
@@ -82,6 +89,9 @@ uvicorn app.main:app --reload --port 8000
 | `API_MTG_BROADCAST_RL_PER_CHAT_SEC` | `1` | Минимум секунд между сообщениями одному чату. |
 | `API_MTG_BROADCAST_STREAM_MAXLEN` | `10000` | Approximate MAXLEN для `mtproto:rotated` XADD. |
 | `API_MTG_BROADCAST_BOT_NOTIFY_URL` | `http://bot:8081/internal/notify/mtproto_rotated` | Bot endpoint для HMAC POST. |
+| `API_BILLING_ENABLED` | `false` | Stage 11 master flag. Off → `/internal/payments/*` → 409 `billing_disabled`. |
+| `API_BILLING_PLAN_TTL_PENDING_SEC` | `900` | TTL стейл-PENDING ордеров; create_order чистит просрочку перед вставкой. |
+| `API_BILLING_REFUND_BOT_NOTIFY_URL` | `http://bot:8081/internal/refund/star_payment` | Bot endpoint для two-phase refund (HMAC POST). |
 
 ## Миграции
 

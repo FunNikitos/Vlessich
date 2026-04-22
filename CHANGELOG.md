@@ -7,6 +7,99 @@
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-04-22 — Stage 11: Billing / Payments (Telegram Stars MVP)
+
+### Architecture
+
+Закрывает revenue gap: теперь подписку можно купить напрямую через
+Telegram Stars, а не только активацией заранее выпущенного кода.
+Provider — **только Telegram Stars** (`provider_token=''`, `currency='XTR'`)
+для MVP; столбцы `currency` на `plans` / `orders` оставлены для
+будущих провайдеров.
+
+Flow покупки (подписывает HMAC ключом `API_INTERNAL_SECRET`):
+
+1. Бот `/buy` → `POST /internal/payments/plans` → inline-клавиатура
+   с активными SKU (seed: 1m/3m/12m).
+2. Выбор плана → `POST /internal/payments/create_order` возвращает
+   PENDING `Order` с `invoice_payload = order.id` и `amount_xtr`.
+3. Бот делает `bot.send_invoice(provider_token='', currency='XTR',
+   prices=[LabeledPrice])`.
+4. Telegram шлёт `pre_checkout_query` → бот → `POST /internal/payments/precheck`
+   (валидирует state + amount). Бот отвечает `ok=True/False`.
+5. `F.successful_payment` → `POST /internal/payments/success` →
+   `billing.mark_paid` в одной транзакции: PENDING → PAID, extend или
+   issue `Subscription`, provisioning через Remnawave (create_user
+   для новых / extend_user для существующих). Replay по
+   `telegram_payment_charge_id` идемпотентен.
+
+Refund — **manual, admin-only, two-phase**:
+
+1. Superadmin → `POST /admin/orders/{id}/refund`.
+2. API HMAC-POST'ит `/internal/refund/star_payment` на bot-процесс
+   (только он держит Bot token).
+3. Bot вызывает `bot.refund_star_payment(user_id, telegram_charge_id)`
+   и отвечает 2xx.
+4. Только после успеха bot-фазы API транзакционно транзиционирует
+   `Order.PAID → REFUNDED` и revoke'ит Subscription, если её
+   `last_order_id` всё ещё указывает на этот order (overlap-aware:
+   если с тех пор был оплачен более новый order, подписка остаётся
+   ACTIVE — возвращена только «перекрытая» оплата).
+
+Auto-renewal в MVP отсутствует: покупка одноразовая, переиспользуют
+существующие reminders 24h/6h/1h на `Subscription.expires_at`.
+
+Детали — `docs/plan-stage-11.md`, `docs/ARCHITECTURE.md §23`.
+
+### Added
+
+- Models `Plan` (fixed SKU catalog) и `Order` (state PENDING / PAID /
+  REFUNDED / FAILED) + `Subscription.last_order_id` FK на `orders.id`
+  для overlap-aware refund логики. Migration `0006_stage11`.
+  Partial unique index `ix_orders_one_pending_per_user` гарантирует
+  максимум один live PENDING на пользователя; partial unique
+  `ix_orders_telegram_charge_id` предотвращает двойное списание по
+  одному Telegram charge id.
+- `app.services.billing` — sans-I/O state machine: `list_active_plans`,
+  `create_order` (cleanup stale PENDING), `precheck`, `mark_paid`,
+  `refund`, `seed_default_plans`. Типизированные `BillingError`
+  subclasses (INVALID_PLAN / ORDER_NOT_FOUND / ORDER_NOT_PENDING /
+  ORDER_NOT_PAID / ORDER_ALREADY_REFUNDED / PAYMENT_AMOUNT_MISMATCH /
+  BILLING_DISABLED) → router маппит на `ApiCode` + HTTP.
+- Router `POST /internal/payments/{plans,create_order,precheck,success}`
+  (HMAC-protected).
+- Router `/admin/orders` (list + detail + refund, RBAC superadmin для
+  refund; readonly+ для чтения).
+- Bot /buy flow: `app.handlers.purchase` (command + callback + invoice
+  + pre_checkout + successful_payment), «💎 Купить подписку» кнопка
+  в главном меню (gated by `BOT_BILLING_ENABLED`).
+- Bot endpoint `/internal/refund/star_payment` в
+  `app.notify_server` (HMAC + `bot.refund_star_payment` +
+  `REFUND_NOTICE` DM).
+- Prometheus metrics: `vlessich_orders_total{status,plan}`,
+  `vlessich_revenue_xtr_total{plan}`, `vlessich_refunds_total{plan}`.
+- Alert rules (`infra/prometheus/rules/vlessich.yml`, группа
+  `vlessich.billing`): `OrderFailureSpike` (>0.1 failed/s за 10m),
+  `RefundVolumeHigh` (>0.05 refunds/s за 1h).
+- `seed_default_plans` запускается в `app.main` lifespan
+  (idempotent, NO UPDATE — ручные правки цен не перезаписываются).
+- Env vars: `API_BILLING_ENABLED`, `API_BILLING_PLAN_TTL_PENDING_SEC`,
+  `API_BILLING_REFUND_BOT_NOTIFY_URL`, `BOT_BILLING_ENABLED`,
+  `BOT_INTERNAL_REFUND_PATH`.
+- Tests: `api/tests/test_billing_service.py` (state machine),
+  `api/tests/test_admin_orders.py` (list / detail / two-phase refund
+  с stub-ом `aiohttp.ClientSession` вместо реального bot-процесса),
+  `bot/tests/test_purchase_handler.py` (smoke + keyboard +
+  тексты-инварианты).
+
+### Notes
+
+- Оплата идёт только в XTR. `provider_token=''` — обязательное условие
+  для Telegram Stars; не путать с пустым YooKassa/Stripe токеном.
+- `billing.refund` **не** вызывает `remna.revoke_user(...)` —
+  consistent с существующим `admin/subscriptions.revoke` (будет
+  унифицировано отдельной задачей).
+
 ## [0.10.0] — 2026-04-22 — Stage 10: Auto-rebroadcast deeplinks + cron MTProto rotation
 
 ### Architecture
