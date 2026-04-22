@@ -35,6 +35,7 @@ from app.schemas import (
 )
 from app.security import verify_internal_signature
 from app.services import billing
+from app.services.remnawave import RemnawaveClient, get_remnawave
 
 router = APIRouter(
     prefix="/internal/payments",
@@ -140,6 +141,7 @@ async def payment_success(
     payload: PaymentSuccessIn,
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
+    remna: Annotated[RemnawaveClient, Depends(get_remnawave)],
 ) -> PaymentSuccessOut:
     _ensure_enabled(settings)
     try:
@@ -149,6 +151,7 @@ async def payment_success(
             amount_xtr=payload.amount_xtr,
             telegram_payment_charge_id=payload.telegram_payment_charge_id,
             provider_payment_charge_id=payload.provider_payment_charge_id,
+            remna=remna,
         )
     except billing.BillingError as exc:
         raise _map_billing_error(exc) from exc

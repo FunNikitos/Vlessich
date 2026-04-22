@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import ApiCode
 from app.metrics import ORDERS_TOTAL, REFUNDS_TOTAL, REVENUE_XTR_TOTAL
 from app.models import AuditLog, Order, Plan, Subscription
+from app.services.remnawave import RemnawaveClient, RemnawaveError
 
 log = structlog.get_logger("billing")
 
@@ -295,6 +296,7 @@ async def mark_paid(
     amount_xtr: int,
     telegram_payment_charge_id: str,
     provider_payment_charge_id: str | None,
+    remna: RemnawaveClient,
 ) -> PaidResult:
     """Idempotently transition PENDING → PAID and extend/issue subscription.
 
@@ -362,6 +364,20 @@ async def mark_paid(
             )
             session.add(sub)
             await session.flush()
+            # Provision via Remnawave. Failure aborts the transaction —
+            # the bot caller will see 5xx and Telegram retries the
+            # successful_payment webhook. Idempotency lock on
+            # ``order.telegram_payment_charge_id`` (set only on PAID)
+            # protects against double provision.
+            try:
+                remna_user = await remna.create_user(
+                    sub.id, plan.code, plan.duration_days
+                )
+            except (RemnawaveError, KeyError, ValueError) as exc:
+                log.exception("billing.remna.create_failed", order_id=str(order.id))
+                raise BillingError(str(exc)) from exc
+            sub.sub_url_token = remna_user.sub_token
+            sub.remna_user_id = remna_user.remna_user_id
         else:
             _extend_subscription(
                 sub,
@@ -369,6 +385,32 @@ async def mark_paid(
                 now=now,
                 order_id=order.id,
             )
+            if sub.remna_user_id is not None:
+                try:
+                    await remna.extend_user(sub.remna_user_id, plan.duration_days)
+                except (RemnawaveError, KeyError) as exc:
+                    log.exception(
+                        "billing.remna.extend_failed",
+                        order_id=str(order.id),
+                        remna_user_id=sub.remna_user_id,
+                    )
+                    raise BillingError(str(exc)) from exc
+            else:
+                # Sub exists without Remna handle (e.g. legacy EXPIRED
+                # sub being revived by a new purchase). Issue fresh
+                # user in Remna and attach.
+                try:
+                    remna_user = await remna.create_user(
+                        sub.id, plan.code, plan.duration_days
+                    )
+                except (RemnawaveError, KeyError, ValueError) as exc:
+                    log.exception(
+                        "billing.remna.create_failed_attach",
+                        order_id=str(order.id),
+                    )
+                    raise BillingError(str(exc)) from exc
+                sub.sub_url_token = remna_user.sub_token
+                sub.remna_user_id = remna_user.remna_user_id
 
         order.status = "PAID"
         order.paid_at = now
