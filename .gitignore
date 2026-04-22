@@ -13,6 +13,14 @@ terraform.tfvars
 .terraform/
 .terraform.lock.hcl
 
+# Ansible secrets / inventory — only *.example variants are tracked.
+ansible/inventory/hosts.yml
+ansible/group_vars/all.yml
+ansible/group_vars/vpn_nodes/vault.yml
+!ansible/inventory/hosts.example.yml
+!ansible/group_vars/all.yml.example
+!ansible/group_vars/vpn_nodes/vault.yml.example
+
 # -----------------------------------------------------------------------------
 # Python
 # -----------------------------------------------------------------------------

@@ -55,6 +55,17 @@ mtg_image: "nineseconds/mtg:2"
 mtg_port: 8443                    # на отдельной ноде это будет основной порт
 mtg_cloak_host: "www.microsoft.com"
 
+# Stage 9: per-user mtg pool. When enabled, `tasks/mtg_per_user.yml`
+# renders one config per entry in `mtg_per_user_pool_items` and
+# launches mtg@<port>.service per entry. Feed items from the API
+# /admin/mtproto/pool/bootstrap response.
+mtg_per_user_enabled: false
+mtg_per_user_pool_items: []
+# Example:
+#   mtg_per_user_pool_items:
+#     - { port: 8443, secret: "eeABCD...cloak_hex" }
+#     - { port: 8444, secret: "eeBEEF...cloak_hex" }
+
 # --- nftables ---
 # Закрываем всё, кроме нужного.
 nft_allowed_tcp_ports:

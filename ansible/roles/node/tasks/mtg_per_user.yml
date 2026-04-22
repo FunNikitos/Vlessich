@@ -1,0 +1,72 @@
+---
+# Per-user mtg pool (Stage 9). One systemd service per port, each fed
+# from /opt/mtg/pool/{port}.toml rendered from the API pool dump.
+#
+# Flow:
+#   1. Operator calls POST /admin/mtproto/pool/bootstrap (once).
+#   2. Feeds the JSON response into `mtg_per_user_pool_items` via
+#      ansible-vault (or `-e @pool.json`).
+#   3. This task renders one config per item and ensures one mtg
+#      container per port via the `mtg@.service` templated unit.
+#
+# Expected input variable (list of dicts):
+#   mtg_per_user_pool_items:
+#     - { port: 8443, secret: "eeabc...cloak_hex" }
+#     - { port: 8444, secret: "eedef...cloak_hex" }
+
+- name: Create per-user mtg pool directory
+  ansible.builtin.file:
+    path: /opt/mtg/pool
+    state: directory
+    mode: "0700"
+
+- name: Render per-user mtg configs
+  ansible.builtin.template:
+    src: mtg.pool.config.toml.j2
+    dest: "/opt/mtg/pool/{{ item.port }}.toml"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ mtg_per_user_pool_items }}"
+  loop_control:
+    label: "port={{ item.port }}"
+  vars:
+    mtg_secret: "{{ item.secret }}"
+    mtg_port: "{{ item.port }}"
+  notify: restart mtg pool
+
+- name: Install mtg@.service systemd template
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/mtg@.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=mtg MTProto proxy (port %i)
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      RestartSec=5
+      ExecStartPre=-/usr/bin/docker rm -f mtg-%i
+      ExecStart=/usr/bin/docker run --rm --name mtg-%i \
+        --network host \
+        -v /opt/mtg/pool/%i.toml:/config.toml:ro \
+        {{ mtg_image }} run /config.toml
+      ExecStop=/usr/bin/docker stop mtg-%i
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: restart mtg pool
+
+- name: Enable + start mtg@<port>.service per pool entry
+  ansible.builtin.systemd:
+    name: "mtg@{{ item.port }}.service"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ mtg_per_user_pool_items }}"
+  loop_control:
+    label: "port={{ item.port }}"

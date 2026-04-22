@@ -1,0 +1,41 @@
+# Vlessich — секреты для vpn_nodes (все FI-ноды).
+#
+# 1. Скопируй как group_vars/vpn_nodes/vault.yml:
+#      cp group_vars/vpn_nodes/vault.yml.example group_vars/vpn_nodes/vault.yml
+#
+# 2. Заполни реальные значения (генерация ниже).
+#
+# 3. Зашифруй файл:
+#      ansible-vault encrypt group_vars/vpn_nodes/vault.yml
+#
+# 4. Только зашифрованный файл коммить в git.
+
+# -----------------------------------------------------------------------------
+# fwknop: SPA-ключи (single-packet authorization) для защищённого SSH.
+# Генерация:
+#   python3 -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
+# Для каждого — отдельное значение; НЕ переиспользовать между нодами.
+# -----------------------------------------------------------------------------
+vault_fwknop_key_base64: "REPLACE_ME_32_BYTES_B64"
+vault_fwknop_hmac_base64: "REPLACE_ME_32_BYTES_B64"
+
+# -----------------------------------------------------------------------------
+# Borg backup — passphrase для шифрования репозитория.
+# Генерация:
+#   openssl rand -base64 48
+# -----------------------------------------------------------------------------
+vault_borg_passphrase: "REPLACE_ME_LONG_RANDOM_PASSPHRASE"
+
+# -----------------------------------------------------------------------------
+# S3-совместимое хранилище для бэкапов (опционально).
+# -----------------------------------------------------------------------------
+vault_s3_access_key: "REPLACE_ME"
+vault_s3_secret_key: "REPLACE_ME"
+vault_s3_endpoint: "https://s3.example.com"
+vault_s3_bucket: "vlessich-backups"
+
+# -----------------------------------------------------------------------------
+# Cloudflare API token (для DNS-01 challenge в Caddy, если заданы *.example.com).
+# Scope: Zone.DNS Edit для одной зоны.
+# -----------------------------------------------------------------------------
+vault_cloudflare_api_token: "REPLACE_ME"

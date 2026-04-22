@@ -87,6 +87,10 @@
   tags: [mtg, mtproto]
   when: mtg_enabled
 
+- ansible.builtin.import_tasks: mtg_per_user.yml
+  tags: [mtg, mtproto, per_user]
+  when: mtg_per_user_enabled
+
 - ansible.builtin.import_tasks: monitoring.yml
   tags: [monitoring, observability]
 

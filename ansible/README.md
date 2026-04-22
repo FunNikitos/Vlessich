@@ -23,16 +23,25 @@ cd ansible/
 cp inventory/hosts.example.yml inventory/hosts.yml
 # Заполнить inventory: IP, hostname
 
-# Создать vault для секретов
-ansible-vault create group_vars/vpn_nodes/vault.yml
-# → положить:
-#   vault_fwknop_key_base64: "..."
-#   vault_fwknop_hmac_base64: "..."
-#   vault_borg_passphrase: "..."
+# Общие переменные (SSH-ключи админов!)
+cp group_vars/all.yml.example group_vars/all.yml
+#   → ssh_pubkeys: ["ssh-ed25519 AAAA... admin@laptop"]
+#   ⚠️ ОБЯЗАТЕЛЬНО заполнить ssh_pubkeys ДО первого деплоя, иначе после
+#      включения fwknop SSH на ноде станет недоступен.
 
-# Положить SSH-ключи администраторов в group_vars/all.yml
-# → ssh_pubkeys: ["ssh-ed25519 AAAA... admin@laptop"]
+# Секреты (fwknop, borg, s3, cloudflare)
+cp group_vars/vpn_nodes/vault.yml.example group_vars/vpn_nodes/vault.yml
+# → заполнить, затем:
+ansible-vault encrypt group_vars/vpn_nodes/vault.yml
 ```
+
+### Pre-flight checklist (перед `make deploy-node`)
+
+- [ ] `inventory/hosts.yml` заполнен реальным IP и hostname.
+- [ ] `group_vars/all.yml` содержит хотя бы один `ssh_pubkeys`.
+- [ ] `group_vars/vpn_nodes/vault.yml` зашифрован и содержит все `vault_*`.
+- [ ] SSH доступ к ноде на стандартном порту 22 работает (`ssh root@<ip>`).
+- [ ] DNS `public_hostname` → IP ноды уже прописан (для ACME).
 
 ## Деплой
 
@@ -49,6 +58,14 @@ ansible-playbook -i inventory/hosts.yml site.yml --tags nftables
 # Включить mtg на этой ноде
 ansible-playbook -i inventory/hosts.yml site.yml --tags mtg \
   -e mtg_enabled=true
+
+# Per-user mtg pool (Stage 9): рендер N конфигов + systemd mtg@.service
+# на каждый порт. pool_items.json — это массив
+# [{port, secret}], полученный из POST /admin/mtproto/pool/bootstrap.
+# См. mtg/README.md для полного workflow.
+ansible-playbook -i inventory/hosts.yml site.yml --tags per_user \
+  -e mtg_per_user_enabled=true \
+  -e "@pool_items.json"
 ```
 
 ## Через Makefile (рекомендуется)
@@ -95,6 +112,7 @@ ansible/
         │   ├── xray.yml
         │   ├── adguardhome.yml
         │   ├── mtg.yml
+        │   ├── mtg_per_user.yml
         │   ├── monitoring.yml
         │   ├── backup.yml
         │   └── fail2ban.yml
@@ -103,5 +121,6 @@ ansible/
             ├── Caddyfile.j2
             ├── xray.config.json.j2
             ├── AdGuardHome.yaml.j2
-            └── mtg.config.toml.j2
+            ├── mtg.config.toml.j2
+            └── mtg.pool.config.toml.j2
 ```

@@ -47,6 +47,42 @@ class Settings(BaseSettings):
     webapp_url: HttpUrl | None = None
     support_username: str = "vlessich_support"
 
+    # Stage 10: MTProto rotation broadcast endpoint (called by api
+    # `mtproto_broadcaster` worker with HMAC signature). Listens on a
+    # separate aiohttp app from the Telegram webhook.
+    internal_notify_enabled: bool = Field(
+        default=True,
+        description="Enable /internal/notify/* HTTP endpoints in bot process.",
+    )
+    internal_notify_host: str = "0.0.0.0"
+    internal_notify_port: int = 8081
+    internal_notify_path: str = "/internal/notify/mtproto_rotated"
+
+    # Stage 11: Billing / Telegram Stars. Master flag gates the /buy
+    # menu in the bot UI and the F.successful_payment handler. The
+    # refund endpoint on notify_server stays available regardless so
+    # admins can still issue refunds during a billing freeze.
+    billing_enabled: bool = Field(
+        default=False,
+        description="Enable /buy menu and Telegram Stars purchase flow.",
+    )
+    internal_refund_path: str = Field(
+        default="/internal/refund/star_payment",
+        description="HMAC POST endpoint on notify_server invoked by API admin refund.",
+    )
+
+    # Stage 12: Smart-routing. Master flag gates the /config command +
+    # main-menu button. Sub-Worker base URL is used to craft the
+    # download deep-link handed to the user after profile switch.
+    smart_routing_enabled: bool = Field(
+        default=False,
+        description="Enable /config command and routing profile selector.",
+    )
+    sub_worker_base_url: HttpUrl | None = Field(
+        default=None,
+        description="Public sub-Worker base URL for subscription download links.",
+    )
+
     @property
     def use_webhook(self) -> bool:
         return self.webhook_url is not None
@@ -54,4 +90,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    # ``model_validate({})`` forces env-based load without tripping mypy on
+    # required fields (pydantic-settings reads from env, not kwargs).
+    return Settings.model_validate({})

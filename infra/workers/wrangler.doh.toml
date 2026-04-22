@@ -1,0 +1,10 @@
+name = "vlessich-doh"
+main = "doh.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+UPSTREAM_DOH = "https://cloudflare-dns.com/dns-query"
+FALLBACK_DOH = "https://dns.quad9.net/dns-query"
+ENABLE_ADBLOCK = "0"
+
+# Production deploy goes through Terraform (infra/cloudflare.tf).

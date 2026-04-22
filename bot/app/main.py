@@ -12,20 +12,26 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from aiohttp import web
+from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
 from app.handlers import router as root_router
 from app.logging import log, setup_logging
 from app.middlewares.throttling import ThrottlingMiddleware
+from app.notify_server import start_notify_server
 
 SHUTDOWN_TIMEOUT: Final = 10.0
 
 
-def build_dispatcher(settings: Settings) -> Dispatcher:
-    storage = RedisStorage.from_url(settings.redis_url)
+def build_dispatcher(settings: Settings, redis: Redis) -> Dispatcher:
+    storage = RedisStorage(redis=redis)
     dp = Dispatcher(storage=storage)
-    dp.message.middleware(ThrottlingMiddleware())
-    dp.callback_query.middleware(ThrottlingMiddleware())
+    # Expose the shared Redis client to handlers via dependency injection.
+    dp["redis"] = redis
+    msg_throttle = ThrottlingMiddleware(redis, rate=2, per_seconds=1, prefix="msg")
+    cb_throttle = ThrottlingMiddleware(redis, rate=4, per_seconds=1, prefix="cb")
+    dp.message.middleware(msg_throttle)
+    dp.callback_query.middleware(cb_throttle)
     dp.include_router(root_router)
     return dp
 
@@ -41,17 +47,24 @@ async def run() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
 
+    redis: Redis = Redis.from_url(settings.redis_url, decode_responses=False)
     bot = build_bot(settings)
-    dp = build_dispatcher(settings)
+    dp = build_dispatcher(settings, redis)
 
     log.info("bot.start", env=settings.env, mode="webhook" if settings.use_webhook else "polling")
+    notify_runner = None
+    if settings.internal_notify_enabled:
+        notify_runner = await start_notify_server(settings=settings, bot=bot)
     try:
         if settings.use_webhook:
             await _run_webhook(bot, dp, settings)
         else:
             await _run_polling(bot, dp)
     finally:
+        if notify_runner is not None:
+            await asyncio.wait_for(notify_runner.cleanup(), timeout=SHUTDOWN_TIMEOUT)
         await bot.session.close()
+        await redis.aclose()
         log.info("bot.stop")
 
 

@@ -58,6 +58,74 @@ services:
     volumes:
       - ./bot:/app
 
+  # Subscription expiry reminders. Reuses the api image; runs in send-only
+  # aiogram.Bot mode (no polling). Requires BOT_TOKEN in the env file.
+  reminders:
+    build: ./api
+    restart: unless-stopped
+    env_file:
+      - ./api/.env.dev
+      - ./bot/.env.dev
+    depends_on:
+      db:    { condition: service_healthy }
+      api:   { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.reminders
+
+  # Active prober (Stage 5): TCP-connects nodes on probe_port, records
+  # NodeHealthProbe rows, applies BURN/RECOVER transitions.
+  prober:
+    build: ./api
+    restart: unless-stopped
+    env_file: ./api/.env.dev
+    depends_on:
+      db:  { condition: service_healthy }
+      api: { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.prober
+    ports:
+      - "127.0.0.1:9101:9101"
+
+  # MTProto cron auto-rotator (Stage 10). Every API_MTG_ROTATOR_INTERVAL_SEC
+  # checks ACTIVE shared secret age; rotates if older than
+  # API_MTG_SHARED_ROTATION_DAYS (default 30) and master flag on.
+  # Exports vlessich_mtproto_shared_secret_age_seconds on :9102.
+  mtproto_rotator:
+    build: ./api
+    restart: unless-stopped
+    env_file: ./api/.env.dev
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.mtproto_rotator
+    ports:
+      - "127.0.0.1:9102:9102"
+
+  # MTProto rotation broadcaster (Stage 10). Consumes mtproto:rotated
+  # Redis stream and DMs each affected user via bot's
+  # /internal/notify/mtproto_rotated endpoint (HMAC). Idle when
+  # API_MTG_BROADCAST_ENABLED=false. Exports
+  # vlessich_mtproto_broadcast_sent_total on :9103.
+  mtproto_broadcaster:
+    build: ./api
+    restart: unless-stopped
+    env_file: ./api/.env.dev
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+      bot:   { condition: service_started }
+    volumes:
+      - ./api:/app
+    command: python -m app.workers.mtproto_broadcaster
+    ports:
+      - "127.0.0.1:9103:9103"
+
   webapp:
     build:
       context: ./webapp
@@ -73,6 +141,83 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5174:80"
+
+  # SMTP catcher for dev notifications (TZ Этап 0). SMTP: 1025, Web UI: 8025.
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
+  # MTProto proxy (Stage 8). In prod runs on a separate VPS (TZ §9A.8);
+  # here we wire it for local end-to-end testing of the bot deeplink
+  # flow. Edit mtg/config.toml first (see mtg/README.md). The /metrics
+  # endpoint is bound to 127.0.0.1:9410 inside the container; we
+  # publish it for Prometheus scrape from the host network.
+  mtg:
+    image: nineseconds/mtg:2
+    restart: unless-stopped
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/config.toml:/config.toml:ro
+    ports:
+      - "8443:8443"
+      - "127.0.0.1:9410:9410"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9410/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Per-user mtg pool (Stage 9). Opt-in via `--profile per-user-mtg`.
+  # Rendered configs live under ./mtg/pool/{port}.toml and must be
+  # generated from GET /admin/mtproto/pool/config (see mtg/README.md).
+  # This compose wires 4 ports as a dev-friendly default (8444..8447);
+  # adjust `ports:` + volume paths to match your bootstrap count.
+  mtg-8444:
+    profiles: ["per-user-mtg"]
+    image: nineseconds/mtg:2
+    restart: unless-stopped
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/pool/8444.toml:/config.toml:ro
+    ports:
+      - "8444:8444"
+      - "127.0.0.1:9444:9444"
+
+  mtg-8445:
+    profiles: ["per-user-mtg"]
+    image: nineseconds/mtg:2
+    restart: unless-stopped
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/pool/8445.toml:/config.toml:ro
+    ports:
+      - "8445:8445"
+      - "127.0.0.1:9445:9445"
+
+  mtg-8446:
+    profiles: ["per-user-mtg"]
+    image: nineseconds/mtg:2
+    restart: unless-stopped
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/pool/8446.toml:/config.toml:ro
+    ports:
+      - "8446:8446"
+      - "127.0.0.1:9446:9446"
+
+  mtg-8447:
+    profiles: ["per-user-mtg"]
+    image: nineseconds/mtg:2
+    restart: unless-stopped
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/pool/8447.toml:/config.toml:ro
+    ports:
+      - "8447:8447"
+      - "127.0.0.1:9447:9447"
 
 volumes:
   pgdata:

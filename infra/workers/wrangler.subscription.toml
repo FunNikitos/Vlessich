@@ -1,0 +1,14 @@
+name = "vlessich-subscription"
+main = "subscription.js"
+compatibility_date = "2025-01-01"
+
+# Local dev bindings - real values come from Terraform in prod.
+[vars]
+BACKEND_URL = "http://localhost:8000/internal/sub"
+
+# Secrets for `wrangler dev` must be exported from shell:
+#   $env:BACKEND_SECRET="..."
+#   $env:IP_SALT="..."
+#
+# Production deploy goes through Terraform (infra/cloudflare.tf).
+# This file exists for `wrangler dev --local` smoke tests and CI dry-runs.

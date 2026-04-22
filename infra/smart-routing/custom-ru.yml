@@ -1,0 +1,47 @@
+# Stage 12: locally curated RU domain list. Loaded by the "custom"
+# RulesetSource via the puller (kind=custom => url is NULL, raw payload
+# read from this file at seed time / admin re-upload).
+#
+# Shape:
+#   domains:
+#     - example.ru
+#
+# Rules:
+# - Lowercase, no scheme, no path, no leading dot.
+# - Each entry is treated as suffix-match (singbox `domain_suffix`) so
+#   `sber.ru` will also match `online.sber.ru`.
+# - Keep this list small and high-signal; bulk lists belong in
+#   antifilter or v2fly geosite sources.
+domains:
+  - sber.ru
+  - sberbank.ru
+  - gosuslugi.ru
+  - mos.ru
+  - nalog.ru
+  - nalog.gov.ru
+  - rkn.gov.ru
+  - vk.com
+  - vk.ru
+  - mail.ru
+  - yandex.ru
+  - ya.ru
+  - kinopoisk.ru
+  - ozon.ru
+  - wildberries.ru
+  - avito.ru
+  - rt.ru
+  - 1tv.ru
+  - rbc.ru
+  - lenta.ru
+  - rzd.ru
+  - mts.ru
+  - megafon.ru
+  - beeline.ru
+  - tele2.ru
+  - tinkoff.ru
+  - alfabank.ru
+  - vtb.ru
+  - hh.ru
+  - drom.ru
+  - 2gis.ru
+  - dzen.ru

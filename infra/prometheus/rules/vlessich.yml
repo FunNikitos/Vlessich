@@ -1,0 +1,196 @@
+# Vlessich alert rules — Stage 7
+#
+# Load via prometheus.yml:
+#   rule_files:
+#     - /etc/prometheus/rules/vlessich.yml
+#
+# Wire alertmanager separately (deploy-time, not in this repo).
+# Severity convention: critical = page on-call, warning = ticket, info = log only.
+groups:
+  - name: vlessich.nodes
+    interval: 30s
+    rules:
+      - alert: NodeBurnSpike
+        expr: increase(vlessich_node_burned_total[15m]) > 2
+        for: 0m
+        labels:
+          severity: warning
+          service: prober
+        annotations:
+          summary: "More than 2 nodes burned in last 15m"
+          description: |
+            {{ $value }} HEALTHY -> BURNED transitions in the last 15
+            minutes. Check edge probe failures and ISP / DPI status.
+
+      - alert: ProbeSuccessLow
+        expr: |
+          (
+            sum(rate(vlessich_probe_total{ok="true",source="edge"}[10m]))
+            /
+            sum(rate(vlessich_probe_total{source="edge"}[10m]))
+          ) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: prober
+        annotations:
+          summary: "Edge probe success ratio below 80% for 10m"
+          description: |
+            Aggregate edge-probe success ratio is {{ $value | humanizePercentage }}.
+            Either widespread node outage or prober networking issue.
+
+      - alert: ProberDown
+        expr: up{job="vlessich-prober"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: prober
+        annotations:
+          summary: "Prober scrape target down for 5m"
+          description: |
+            Prometheus cannot scrape the prober /metrics endpoint.
+            BURN detection is offline.
+
+  - name: vlessich.api
+    interval: 30s
+    rules:
+      - alert: ApiP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(vlessich_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "API p95 latency > 1s for 5m"
+          description: |
+            p95 latency is {{ $value }}s. Investigate slow queries or
+            upstream Postgres pressure.
+
+  - name: vlessich.admin
+    interval: 30s
+    rules:
+      - alert: AdminCaptchaFailSpike
+        expr: rate(vlessich_admin_login_total{result="captcha_fail"}[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: info
+          service: api
+        annotations:
+          summary: "Captcha failure rate elevated"
+          description: |
+            > 0.2 captcha-fail per second over 5m. Possible bot traffic
+            against /admin/auth/login.
+
+  - name: vlessich.mtg
+    interval: 30s
+    rules:
+      - alert: MtgDown
+        expr: up{job="vlessich-mtg"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: mtg
+        annotations:
+          summary: "MTProto (mtg) scrape target down for 5m"
+          description: |
+            Prometheus cannot scrape mtg /metrics (127.0.0.1:9410).
+            Telegram users will lose MTProto access until mtg recovers.
+
+      - alert: MtprotoSharedSecretStale
+        expr: vlessich_mtproto_shared_secret_age_seconds > 3110400
+        for: 1h
+        labels:
+          severity: warning
+          service: mtproto_rotator
+        annotations:
+          summary: "Shared MTProto secret not rotated in 36+ days"
+          description: |
+            Age gauge is {{ $value | humanizeDuration }}. Either the
+            rotator worker is down, API_MTG_AUTO_ROTATION_ENABLED is
+            false, or the rotator has been failing silently. Check
+            the `mtproto_rotator` container logs and
+            `vlessich_mtproto_auto_rotation_total{result="error"}`.
+
+      - alert: MtprotoBroadcastFailures
+        expr: rate(vlessich_mtproto_broadcast_sent_total{status="failed"}[15m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          service: mtproto_broadcaster
+        annotations:
+          summary: "MTProto broadcast failure rate elevated"
+          description: |
+            > 0.1 failed broadcast per second over 15m. Likely bot
+            `/internal/notify/mtproto_rotated` unreachable or
+            returning 4xx/5xx consistently. Check broadcaster logs
+            and bot notify endpoint reachability.
+
+  - name: vlessich.billing
+    interval: 30s
+    rules:
+      - alert: OrderFailureSpike
+        expr: rate(vlessich_orders_total{status="failed"}[15m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Telegram Stars order failure rate elevated"
+          description: |
+            > 0.1 failed orders per second over 15m. Either pricing
+            mismatches (PAYMENT_AMOUNT_MISMATCH) or stale PENDING
+            cleanup spike. Check `/admin/orders?status=FAILED` and
+            recent `vlessich.billing.*` log entries.
+
+      - alert: RefundVolumeHigh
+        expr: rate(vlessich_refunds_total[1h]) > 0.05
+        for: 1h
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "Telegram Stars refund volume elevated"
+          description: |
+            > 0.05 refunds per second sustained for 1h. Possible abuse,
+            mass dissatisfaction, or admin tooling misuse. Audit
+            `/admin/orders?status=REFUNDED` and `audit_log` for
+            `order_refunded` actor distribution.
+
+  - name: vlessich.ruleset
+    interval: 60s
+    rules:
+      - alert: RulesetPullFailures
+        expr: rate(vlessich_ruleset_pull_total{result="error"}[30m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: ruleset_puller
+        annotations:
+          summary: "Ruleset puller failing for at least one source"
+          description: |
+            One or more ruleset sources have errored consistently for
+            30m. Check ``/admin/ruleset/sources`` for the offending
+            ``last_error`` and ``last_pulled_at``. The smart-routing
+            config will continue to serve the previous current
+            snapshot until a fresh pull succeeds.
+
+      - alert: RulesetStale
+        expr: |
+          (time() - vlessich_ruleset_last_pull_timestamp_seconds) > 86400
+        for: 1h
+        labels:
+          severity: warning
+          service: ruleset_puller
+        annotations:
+          summary: "Ruleset source not refreshed in 24h+"
+          description: |
+            ``{{ $labels.source }}`` last pulled
+            {{ $value | humanizeDuration }} ago. Either the puller
+            worker is down (``API_RULESET_PULLER_ENABLED=false``) or
+            the source has been failing silently. Check
+            ``vlessich_ruleset_pull_total{source="{{ $labels.source }}"}``
+            and the worker container logs.

@@ -34,6 +34,15 @@
     name: mtg
     restart: true
 
+- name: restart mtg pool
+  ansible.builtin.systemd:
+    name: "mtg@{{ item.port }}.service"
+    state: restarted
+    daemon_reload: true
+  loop: "{{ mtg_per_user_pool_items | default([]) }}"
+  loop_control:
+    label: "port={{ item.port }}"
+
 - name: restart fail2ban
   ansible.builtin.systemd:
     name: fail2ban

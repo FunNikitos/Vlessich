@@ -35,3 +35,50 @@ repos:
       - id: terraform_fmt
       - id: terraform_validate
         args: ["--args=-no-color"]
+
+  # Frontend hooks (TZ Этап 0: prettier + eslint + tsc).
+  # Run locally via 'system' language — requires 'make frontend-install' once
+  # to populate node_modules in webapp/ and admin/.
+  - repo: local
+    hooks:
+      - id: frontend-prettier-webapp
+        name: prettier check (webapp)
+        entry: npm --prefix webapp run format:check --silent
+        language: system
+        pass_filenames: false
+        files: '^webapp/.*\.(ts|tsx|css|json)$'
+
+      - id: frontend-prettier-admin
+        name: prettier check (admin)
+        entry: npm --prefix admin run format:check --silent
+        language: system
+        pass_filenames: false
+        files: '^admin/.*\.(ts|tsx|css|json)$'
+
+      - id: frontend-eslint-webapp
+        name: eslint (webapp)
+        entry: npm --prefix webapp run lint --silent
+        language: system
+        pass_filenames: false
+        files: '^webapp/.*\.(ts|tsx)$'
+
+      - id: frontend-eslint-admin
+        name: eslint (admin)
+        entry: npm --prefix admin run lint --silent
+        language: system
+        pass_filenames: false
+        files: '^admin/.*\.(ts|tsx)$'
+
+      - id: frontend-typecheck-webapp
+        name: tsc --noEmit (webapp)
+        entry: npm --prefix webapp run typecheck --silent
+        language: system
+        pass_filenames: false
+        files: '^webapp/.*\.(ts|tsx)$'
+
+      - id: frontend-typecheck-admin
+        name: tsc --noEmit (admin)
+        entry: npm --prefix admin run typecheck --silent
+        language: system
+        pass_filenames: false
+        files: '^admin/.*\.(ts|tsx)$'
