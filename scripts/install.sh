@@ -11,13 +11,19 @@
 #
 # Env overrides (skip prompts when set):
 #   BOT_TOKEN          Telegram bot token (required)
-#   PUBLIC_DOMAIN      api/admin/webapp public hostname (optional → polling mode)
+#   PUBLIC_DOMAIN      webapp/webhook hostname (e.g. fi3.ctom.online).
+#                      Empty → polling mode, no Caddy/TLS.
+#   API_DOMAIN         api hostname     (default: api.${PUBLIC_DOMAIN})
+#   ADMIN_DOMAIN       admin hostname   (default: admin.${PUBLIC_DOMAIN})
+#   ACME_EMAIL         Let's Encrypt contact (default: ${ADMIN_EMAIL})
 #   ADMIN_EMAIL        admin login email          (default admin@localhost)
 #   VLESSICH_DIR       install dir                (default /opt/vlessich)
 #   VLESSICH_REPO      git repo to clone          (default https://github.com/FunNikitos/Vlessich.git)
 #   VLESSICH_BRANCH    branch to track            (default master)
-#   VLESSICH_PROFILES  comma-separated compose profiles (e.g. "mtproto,ruleset")
+#   VLESSICH_PROFILES  comma-separated compose profiles (e.g. "mtproto,ruleset");
+#                      "tls" is auto-added when PUBLIC_DOMAIN is set
 #   VLESSICH_FORCE_OS  set =1 to bypass OS check
+#   VLESSICH_SKIP_DNS_CHECK=1   skip DNS A-record sanity warning
 #
 # Idempotent: re-runs reuse existing .secrets/, pull latest code, re-up
 # compose. Existing admin user is not overwritten.
@@ -197,7 +203,7 @@ prompt_inputs() {
   fi
 
   if [[ -z "${PUBLIC_DOMAIN:-}" && -t 0 ]]; then
-    printf 'Public domain for api/admin/webapp (leave empty to use polling, no public TLS): '
+    printf 'Public domain for webapp+webhook (e.g. fi3.example.com, empty = polling mode): '
     read -r PUBLIC_DOMAIN
   fi
   PUBLIC_DOMAIN="${PUBLIC_DOMAIN:-}"
@@ -207,6 +213,34 @@ prompt_inputs() {
     read -r ADMIN_EMAIL
   fi
   ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
+
+  if [[ -n "${PUBLIC_DOMAIN}" ]]; then
+    API_DOMAIN="${API_DOMAIN:-api.${PUBLIC_DOMAIN}}"
+    ADMIN_DOMAIN="${ADMIN_DOMAIN:-admin.${PUBLIC_DOMAIN}}"
+    ACME_EMAIL="${ACME_EMAIL:-${ADMIN_EMAIL}}"
+    if [[ "${ACME_EMAIL}" == "admin@localhost" ]]; then
+      warn "ACME_EMAIL is 'admin@localhost' — Let's Encrypt will reject it."
+      warn "Set ACME_EMAIL=you@real.tld or pick a non-localhost ADMIN_EMAIL."
+    fi
+
+    if [[ "${VLESSICH_SKIP_DNS_CHECK:-0}" != "1" ]]; then
+      local public_ip
+      public_ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+      if [[ -n "${public_ip}" ]]; then
+        for d in "${PUBLIC_DOMAIN}" "${API_DOMAIN}" "${ADMIN_DOMAIN}"; do
+          local resolved
+          resolved="$(getent hosts "${d}" 2>/dev/null | awk '{print $1}' | head -n1 || true)"
+          if [[ -z "${resolved}" ]]; then
+            warn "DNS: ${d} does not resolve (A-record missing?); TLS will fail until fixed"
+          elif [[ "${resolved}" != "${public_ip}" ]]; then
+            warn "DNS: ${d} → ${resolved} (expected ${public_ip}); TLS may fail"
+          else
+            ok "DNS: ${d} → ${resolved}"
+          fi
+        done
+      fi
+    fi
+  fi
 }
 
 # ---------- 7. render env files ----------
@@ -220,8 +254,10 @@ render_env_files() {
   pg_pw="$(read_secret pg_password)"
 
   local public_base="http://localhost:8000"
+  local cors_origins='["http://localhost:5173","http://localhost:5174"]'
   if [[ -n "${PUBLIC_DOMAIN}" ]]; then
     public_base="https://${PUBLIC_DOMAIN}"
+    cors_origins="[\"https://${PUBLIC_DOMAIN}\",\"https://${API_DOMAIN}\",\"https://${ADMIN_DOMAIN}\",\"http://localhost:5173\",\"http://localhost:5174\"]"
   fi
 
   cat > "${sdir}/db.env" <<EOF
@@ -239,7 +275,7 @@ API_REDIS_URL=redis://redis:6379/1
 API_INTERNAL_SECRET=${internal_secret}
 API_SECRETBOX_KEY=${secretbox}
 API_PUBLIC_BASE_URL=${public_base}
-API_CORS_ORIGINS=["${public_base}","http://localhost:5173","http://localhost:5174"]
+API_CORS_ORIGINS=${cors_origins}
 API_REMNAWAVE_MODE=mock
 API_ADMIN_JWT_SECRET=${jwt}
 API_ADMIN_JWT_TTL_SEC=3600
@@ -310,17 +346,60 @@ EOF
   ok "rendered .secrets/{db,api,bot}.env"
 }
 
+# ---------- 7b. render Caddyfile (only when PUBLIC_DOMAIN set) ----------
+render_caddyfile() {
+  if [[ -z "${PUBLIC_DOMAIN}" ]]; then
+    return 0
+  fi
+  local tmpl="${VLESSICH_DIR}/caddy/Caddyfile.prod.tmpl"
+  local out="${VLESSICH_DIR}/caddy/Caddyfile"
+  if [[ ! -f "${tmpl}" ]]; then
+    warn "caddy template missing at ${tmpl}, skipping TLS profile"
+    return 0
+  fi
+  sed \
+    -e "s|__WEBAPP_DOMAIN__|${PUBLIC_DOMAIN}|g" \
+    -e "s|__API_DOMAIN__|${API_DOMAIN}|g" \
+    -e "s|__ADMIN_DOMAIN__|${ADMIN_DOMAIN}|g" \
+    -e "s|__ACME_EMAIL__|${ACME_EMAIL}|g" \
+    "${tmpl}" > "${out}"
+  chmod 644 "${out}"
+  ok "rendered caddy/Caddyfile (${PUBLIC_DOMAIN}, ${API_DOMAIN}, ${ADMIN_DOMAIN})"
+}
+
 # ---------- 8. compose up ----------
 compose_up() {
   log "docker compose build & up (this may take a few minutes)"
   local profile_args=()
-  if [[ -n "${VLESSICH_PROFILES}" ]]; then
-    IFS=',' read -ra _profs <<< "${VLESSICH_PROFILES}"
+  local profiles="${VLESSICH_PROFILES}"
+  if [[ -n "${PUBLIC_DOMAIN}" ]]; then
+    if [[ -z "${profiles}" ]]; then
+      profiles="tls"
+    elif ! [[ ",${profiles}," == *",tls,"* ]]; then
+      profiles="${profiles},tls"
+    fi
+  fi
+  if [[ -n "${profiles}" ]]; then
+    IFS=',' read -ra _profs <<< "${profiles}"
     for p in "${_profs[@]}"; do
       profile_args+=(--profile "${p}")
     done
-    log "compose profiles enabled: ${VLESSICH_PROFILES}"
+    log "compose profiles enabled: ${profiles}"
   fi
+
+  # Build-time args for webapp/admin (frozen into the static bundle).
+  local bot_username
+  bot_username="$(curl -fsS --max-time 5 "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null \
+    | jq -r '.result.username // "vlessich_bot"' 2>/dev/null || echo "vlessich_bot")"
+  if [[ -n "${PUBLIC_DOMAIN}" ]]; then
+    export WEBAPP_API_BASE_URL="https://${API_DOMAIN}"
+    export ADMIN_API_BASE_URL="https://${API_DOMAIN}"
+  else
+    export WEBAPP_API_BASE_URL="/api"
+    export ADMIN_API_BASE_URL="/api"
+  fi
+  export WEBAPP_BOT_USERNAME="${bot_username}"
+  export ADMIN_TURNSTILE_SITEKEY="${ADMIN_TURNSTILE_SITEKEY:-}"
 
   (
     cd "${VLESSICH_DIR}"
@@ -339,6 +418,31 @@ compose_up() {
     sleep 3
   done
   ok "api is healthy"
+}
+
+# ---------- 8b. set Telegram webhook (when PUBLIC_DOMAIN set) ----------
+set_telegram_webhook() {
+  if [[ -z "${PUBLIC_DOMAIN}" ]]; then
+    return 0
+  fi
+  local webhook_url="https://${PUBLIC_DOMAIN}/telegram/webhook"
+  local webhook_secret
+  webhook_secret="$(grep '^BOT_WEBHOOK_SECRET=' "${VLESSICH_DIR}/.secrets/bot.env" 2>/dev/null | cut -d= -f2 || true)"
+  if [[ -z "${webhook_secret}" ]]; then
+    warn "BOT_WEBHOOK_SECRET missing in bot.env; skipping setWebhook"
+    return 0
+  fi
+  log "registering Telegram webhook → ${webhook_url}"
+  local resp
+  resp="$(curl -fsS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+    --data-urlencode "url=${webhook_url}" \
+    --data-urlencode "secret_token=${webhook_secret}" \
+    --data-urlencode "drop_pending_updates=true" 2>&1 || true)"
+  if echo "${resp}" | grep -q '"ok":true'; then
+    ok "Telegram webhook set"
+  else
+    warn "setWebhook response: ${resp}"
+  fi
 }
 
 # ---------- 9. admin bootstrap ----------
@@ -372,9 +476,16 @@ final_report() {
   printf '\n'
   printf '  install dir : %s\n' "${VLESSICH_DIR}"
   printf '  bot         : @%s (token in .secrets/bot.env)\n' "${bot_username}"
-  printf '  api         : http://127.0.0.1:8000 (healthz: /healthz)\n'
-  printf '  webapp      : http://127.0.0.1:5173\n'
-  printf '  admin UI    : http://127.0.0.1:5174\n'
+  if [[ -n "${PUBLIC_DOMAIN}" ]]; then
+    printf '  webapp      : https://%s\n' "${PUBLIC_DOMAIN}"
+    printf '  api         : https://%s  (also 127.0.0.1:8000)\n' "${API_DOMAIN}"
+    printf '  admin UI    : https://%s\n' "${ADMIN_DOMAIN}"
+    printf '  webhook     : https://%s/telegram/webhook (registered)\n' "${PUBLIC_DOMAIN}"
+  else
+    printf '  api         : http://127.0.0.1:8000 (healthz: /healthz)\n'
+    printf '  webapp      : http://127.0.0.1:5173\n'
+    printf '  admin UI    : http://127.0.0.1:5174\n'
+  fi
   printf '\n'
   printf '%b  Admin login%b\n' "${C_BOLD}" "${C_RESET}"
   printf '    email    : %s\n' "${ADMIN_EMAIL}"
@@ -382,11 +493,11 @@ final_report() {
   printf '    (also stored in %s/.secrets/admin_password)\n' "${VLESSICH_DIR}"
   printf '\n'
   if [[ -n "${PUBLIC_DOMAIN}" ]]; then
-    printf '%b  Webhook setup%b\n' "${C_BOLD}" "${C_RESET}"
-    printf '    1. Put Caddy/nginx in front of 127.0.0.1:8000 with TLS for %s\n' "${PUBLIC_DOMAIN}"
-    printf '    2. Run: curl -X POST https://api.telegram.org/bot<TOKEN>/setWebhook \\\n'
-    printf '              -d url=https://%s/telegram/webhook \\\n' "${PUBLIC_DOMAIN}"
-    printf '              -d secret_token=$(grep BOT_WEBHOOK_SECRET %s/.secrets/bot.env | cut -d= -f2)\n' "${VLESSICH_DIR}"
+    printf '%b  TLS / Caddy%b\n' "${C_BOLD}" "${C_RESET}"
+    printf '    Let'\''s Encrypt certs auto-issued for the 3 domains above.\n'
+    printf '    Make sure A-records for %s, %s, %s point at this host\n' "${PUBLIC_DOMAIN}" "${API_DOMAIN}" "${ADMIN_DOMAIN}"
+    printf '    and ports 80/443 are reachable from the internet.\n'
+    printf '    Caddy logs : docker compose -f docker-compose.prod.yml logs -f caddy\n'
   else
     printf '%b  Mode       %b: bot polling (no public domain set)\n' "${C_BOLD}" "${C_RESET}"
     printf '  webapp/admin: bind only on 127.0.0.1 — open via SSH tunnel:\n'
@@ -413,8 +524,10 @@ main() {
   clone_or_update_repo
   write_secrets
   render_env_files
+  render_caddyfile
   compose_up
   bootstrap_admin
+  set_telegram_webhook
   final_report
   ok "done"
 }

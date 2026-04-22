@@ -37,17 +37,53 @@ Ubuntu-VPS. Один скрипт ставит Docker, клонит репози
 Подключаемся к серверу по SSH и запускаем:
 
 ```bash
+# Polling-режим (без публичного домена, доступ только по SSH-тунелю):
 curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/master/scripts/install.sh \
   | sudo BOT_TOKEN=123456:ABC_DEF... bash
+
+# Публичный HTTPS + webhook (Caddy + Let's Encrypt, 3 subdomain):
+curl -fsSL https://raw.githubusercontent.com/FunNikitos/Vlessich/master/scripts/install.sh \
+  | sudo BOT_TOKEN=123456:ABC_DEF... \
+         PUBLIC_DOMAIN=fi3.example.com \
+         ADMIN_EMAIL=admin@example.com \
+         bash
 ```
 
 Скрипт спросит (если не передали через env):
 
 * `BOT_TOKEN` — токен бота от BotFather (**обязательно**).
-* `PUBLIC_DOMAIN` — например `vlessich.example.com` (опционально, оставьте
-  пустым → бот будет в polling-режиме).
-* `ADMIN_EMAIL` — почта для входа в админку (по умолчанию
-  `admin@localhost`).
+* `PUBLIC_DOMAIN` — корневой домен для webapp + webhook (например
+  `fi3.example.com`). Пусто → polling-режим, без Caddy/TLS.
+* `ADMIN_EMAIL` — почта для входа в админку и контакт для Let's Encrypt
+  (по умолчанию `admin@localhost` — не пройдёт валидацию LE, задайте
+  реальный адрес для публичного режима).
+
+### 3-subdomain TLS topology (рекомендовано)
+
+Когда `PUBLIC_DOMAIN=fi3.example.com` задан, installer разворачивает три
+публичных HTTPS-хоста через встроенный Caddy (profile `tls`, auto
+Let's Encrypt):
+
+| Host                        | Назначение                              |
+|-----------------------------|-----------------------------------------|
+| `fi3.example.com`           | Telegram Mini-App + `/telegram/webhook` |
+| `api.fi3.example.com`       | Backend API (FastAPI)                   |
+| `admin.fi3.example.com`     | Admin UI                                |
+
+Переопределить можно через env: `API_DOMAIN`, `ADMIN_DOMAIN`, `ACME_EMAIL`.
+
+**До запуска** заведите три A-записи (все три → IP сервера):
+
+```
+fi3.example.com          A  1.2.3.4
+api.fi3.example.com      A  1.2.3.4
+admin.fi3.example.com    A  1.2.3.4
+```
+
+Ports 80 и 443 должны быть открыты с интернета (HTTP-01 challenge +
+HTTPS). Installer сам выполнит `setWebhook` после того, как api станет
+healthy. DNS-санити-чек работает автоматически — предупреждает, если
+A-записи ещё не распространились (пропустить: `VLESSICH_SKIP_DNS_CHECK=1`).
 
 В конце скрипт распечатает:
 
@@ -117,7 +153,18 @@ ssh -L 5174:127.0.0.1:5174 -L 5173:127.0.0.1:5173 -L 8000:127.0.0.1:8000 \
 
 ### Хочу публичный HTTPS
 
-Поставьте Caddy или nginx перед стеком:
+Самый простой путь — перезапустить installer с `PUBLIC_DOMAIN` (см. §2):
+он сам поднимет Caddy-сервис в compose под profile `tls`, отрисует
+`caddy/Caddyfile` из шаблона, выпустит Let's Encrypt сертификаты для
+трёх subdomain и пропишет webhook.
+
+```bash
+sudo PUBLIC_DOMAIN=fi3.example.com ADMIN_EMAIL=admin@example.com \
+     bash /opt/vlessich/scripts/install.sh
+```
+
+Если нужен свой reverse-proxy (nginx / внешний Caddy) — запустите без
+`PUBLIC_DOMAIN` и проксируйте вручную:
 
 ```bash
 sudo apt install -y caddy

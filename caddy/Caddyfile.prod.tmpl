@@ -1,0 +1,73 @@
+# Vlessich — Caddy reverse-proxy template (rendered by scripts/install.sh).
+#
+# Placeholders replaced at install time:
+#   __WEBAPP_DOMAIN__  root domain (e.g. fi3.ctom.online) → webapp + /telegram/webhook
+#   __API_DOMAIN__     api subdomain (e.g. api.fi3.ctom.online) → api:8000
+#   __ADMIN_DOMAIN__   admin subdomain (e.g. admin.fi3.ctom.online) → admin:80
+#   __ACME_EMAIL__     contact email for Let's Encrypt
+#
+# All three domains get automatic Let's Encrypt certs via HTTP-01 challenge
+# (requires ports 80+443 reachable from the public internet).
+
+{
+	email __ACME_EMAIL__
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Webapp (Telegram Mini-App) + Telegram webhook passthrough + /api/* to backend.
+# -----------------------------------------------------------------------------
+https://__WEBAPP_DOMAIN__ {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Telegram webhook → bot:8080
+	handle /telegram/webhook {
+		reverse_proxy bot:8080
+	}
+
+	# /api/* → api:8000 (strip the /api prefix)
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Everything else → webapp static (Vite-built SPA)
+	reverse_proxy webapp:80
+}
+
+# -----------------------------------------------------------------------------
+# Standalone API host (used by bot, sub-Worker, admin UI fetch calls).
+# -----------------------------------------------------------------------------
+https://__API_DOMAIN__ {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	reverse_proxy api:8000
+}
+
+# -----------------------------------------------------------------------------
+# Admin UI (public, protect with Cloudflare Access / Basic-Auth upstream).
+# -----------------------------------------------------------------------------
+https://__ADMIN_DOMAIN__ {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy admin:80
+}

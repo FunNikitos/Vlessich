@@ -7,6 +7,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **3-subdomain TLS topology в installer**: `scripts/install.sh` теперь
+  при заданном `PUBLIC_DOMAIN` авто-деривит `API_DOMAIN=api.${PUBLIC_DOMAIN}`
+  и `ADMIN_DOMAIN=admin.${PUBLIC_DOMAIN}`, рендерит
+  `caddy/Caddyfile` из нового `caddy/Caddyfile.prod.tmpl` (HTTP-01 LE,
+  h1/h2/h3, security headers), поднимает Caddy через compose-profile
+  `tls`, проверяет DNS A-records (warn-only, override через
+  `VLESSICH_SKIP_DNS_CHECK=1`) и автоматически вызывает Telegram
+  `setWebhook` после healthy api. Webhook идёт через webapp host
+  (`/telegram/webhook` → `bot:8080`).
+- **`webapp/Dockerfile` и `admin/Dockerfile`** принимают build-args
+  (`VITE_API_BASE_URL`, `VITE_BOT_USERNAME`, `VITE_TURNSTILE_SITEKEY`),
+  что позволяет installer'у вшивать публичный API URL в статический
+  бандл (`https://api.${PUBLIC_DOMAIN}`) на этапе сборки.
+- **`docker-compose.prod.yml`** — новый сервис `caddy` (caddy:2-alpine,
+  profile `tls`, ports 80/443 + 443/udp, volumes `caddydata`/`caddyconfig`),
+  build.args для webapp/admin с env-fallbacks.
+
+### Changed
+
+- `docs/DEPLOY-UBUNTU.md` — секция «Хочу публичный HTTPS» переписана
+  под встроенный Caddy + 3 subdomain (одна команда `sudo PUBLIC_DOMAIN=…
+  bash install.sh`); добавлена таблица доменов и DNS-инструкция.
+- `API_CORS_ORIGINS` в публичном режиме включает все три subdomain'а.
+
 ## [0.13.0] — 2026-04-22 — Stage 13: One-liner Ubuntu installer
 
 ### Added

@@ -95,6 +95,9 @@ services:
     build:
       context: ./webapp
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${WEBAPP_API_BASE_URL:-/api}
+        VITE_BOT_USERNAME: ${WEBAPP_BOT_USERNAME:-vlessich_bot}
     restart: always
     ports:
       - "127.0.0.1:5173:80"
@@ -103,9 +106,35 @@ services:
     build:
       context: ./admin
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${ADMIN_API_BASE_URL:-/api}
+        VITE_TURNSTILE_SITEKEY: ${ADMIN_TURNSTILE_SITEKEY:-}
     restart: always
     ports:
       - "127.0.0.1:5174:80"
+
+  # --- Caddy reverse-proxy (opt-in: --profile tls) -------------------
+  # Renders caddy/Caddyfile from caddy/Caddyfile.prod.tmpl at install
+  # time (scripts/install.sh) and terminates TLS for webapp/api/admin
+  # using Let's Encrypt HTTP-01. Requires public ports 80 + 443.
+
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    restart: always
+    depends_on:
+      api:    { condition: service_started }
+      bot:    { condition: service_started }
+      webapp: { condition: service_started }
+      admin:  { condition: service_started }
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
 
   # --- MTProto stack (opt-in: --profile mtproto) ---------------------
 
@@ -169,3 +198,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  caddydata:
+  caddyconfig:
