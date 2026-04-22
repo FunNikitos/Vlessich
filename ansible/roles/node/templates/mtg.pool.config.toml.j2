@@ -1,0 +1,40 @@
+# =============================================================================
+# Per-user mtg config (Stage 9) — rendered by tasks/mtg_per_user.yml
+# =============================================================================
+# One file per port. Source-of-truth = API DB (scope='user'). Do NOT
+# edit by hand: regenerate from /admin/mtproto/pool/config whenever
+# the pool changes.
+
+secret = "{{ mtg_secret }}"
+bind-to = "0.0.0.0:{{ mtg_port }}"
+concurrency = 4096
+
+[network]
+prefer-ip = "prefer-ipv4"
+
+[network.timeout]
+tcp  = "5s"
+http = "10s"
+idle = "1m"
+
+[defense.anti-replay]
+enabled    = true
+max-size   = "1mb"
+error-rate = 0.001
+
+[defense.block-list]
+enabled = true
+urls = [
+  "https://lists.blocklist.de/lists/all.txt",
+  "https://www.spamhaus.org/drop/drop.txt",
+]
+update-each = "6h"
+download-concurrency = 2
+
+[stats.prometheus]
+enabled   = true
+bind-to   = "127.0.0.1:{{ mtg_port | int + 1000 }}"
+http-path = "/metrics"
+
+debug   = false
+verbose = false
