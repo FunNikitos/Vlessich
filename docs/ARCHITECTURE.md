@@ -1421,3 +1421,178 @@ Admin UI ──POST /admin/orders/{id}/refund──▶ API
 * Auto-renewal отсутствует (manual repurchase).
 * Только Telegram Stars (XTR). Поля `currency` существуют для
   будущих провайдеров (CryptoBot / YooKassa), но enforce'ится `XTR`.
+
+## 24. Smart-routing + RU-lists + AdBlock (Stage 12)
+
+### Цель
+
+DoD из `TZ.md §16`: `sber.ru` идёт **direct** (минуя VPN), `youtube.com`
+идёт **через proxy**, рекламные домены **блокируются** на routing-уровне
+(возврат `REJECT`/dst-blackhole). Пользователь выбирает behavior через
+4 предзаготовленных профиля в боте.
+
+### Routing profiles
+
+| Profile  | smart_routing | adblock | Назначение                                      |
+|----------|---------------|---------|-------------------------------------------------|
+| `full`   | on            | on      | RU direct + proxy others + ads block (TZ §16)   |
+| `smart`  | on            | off     | RU direct + proxy others                        |
+| `adblock`| off           | on      | Всё direct, только ads block (TZ §18.6 DNS-only) |
+| `plain`  | off           | off     | Поведение Stage 2 (всё через VPN)               |
+
+`Subscription.routing_profile` (TEXT NOT NULL DEFAULT `'plain'`,
+CHECK IN enum) — single source of truth. Bool-зеркала
+`smart_routing` / `adblock` обновляются атомарно при `set_profile`
+для обратной совместимости со Stage 2/3 (Mini-App toggles).
+
+### Subsystem layout
+
+```
+┌─ external sources ────────────┐
+│ antifilter.network (RU IPs)   │
+│ v2fly geosite category-ru     │
+│ v2fly geosite category-ads-all│
+│ infra/smart-routing/          │
+│   custom-ru.yml (32 seed)     │
+└──────────────┬────────────────┘
+               │  HTTP GET (6h cron)
+               ▼
+   ┌─ api worker container ─────────────────┐
+   │ ruleset_puller                         │
+   │   per source:                          │
+   │     session.begin_nested() (savepoint) │
+   │     fetch → parse → sha256             │
+   │     if hash != current:                │
+   │       INSERT ruleset_snapshots         │
+   │       UPDATE is_current = TRUE         │
+   │     update last_pulled_at / last_error │
+   │   :9104 vlessich_ruleset_*             │
+   └─────────────────┬──────────────────────┘
+                     │
+                     ▼
+   ┌─ ruleset_snapshots (versioned) ────────┐
+   │ id, source_id, sha256 UNIQUE, raw,     │
+   │ domain_count, is_current, fetched_at   │
+   └─────────────────┬──────────────────────┘
+                     │
+        builder.build_singbox(snapshots, profile)
+        builder.build_clash(snapshots, profile)
+        (sans-I/O, pure functions)
+                     │
+                     ▼
+   ┌─ GET /internal/smart_routing/config ───┐
+   │ HMAC-signed (sub-Worker / bot)         │
+   │ → { singbox: {...}, clash: "..." }     │
+   └─────────────────┬──────────────────────┘
+                     │
+                     ▼
+   ┌─ bot /config command ──────────────────┐
+   │ inline keyboard: full / smart /        │
+   │   adblock / plain                      │
+   │ → POST /internal/smart_routing/        │
+   │   set_profile (HMAC)                   │
+   │ → DM с sub-Worker URL + текущий profile│
+   └────────────────────────────────────────┘
+```
+
+### Builder semantics
+
+* **Sans-I/O**: pure (snapshots, profile) → bytes. Нет DB/HTTP в
+  builder; легко тестируется и кешируется.
+* **Rule order**: ads rule пушится **перед** RU rule. Это гарантирует,
+  что рекламный домен на RU TLD (`*.ad.yandex.ru`) блокируется,
+  а не уходит в direct.
+* **Profile switches**:
+  * `full` → ads(REJECT) + ru(direct) + default(proxy).
+  * `smart` → ru(direct) + default(proxy).
+  * `adblock` → ads(REJECT) + default(direct).
+  * `plain` → default(proxy) (Stage 2 baseline).
+* **Outputs**:
+  * `singbox` → JSON object (primary; нативная поддержка sing-box).
+  * `clash` → YAML string (fallback для legacy clients).
+
+### Database
+
+```sql
+ruleset_sources(
+  id PK, kind TEXT, category TEXT, url TEXT NOT NULL,
+  is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  last_pulled_at TIMESTAMPTZ, last_error TEXT,
+  UNIQUE(kind, category, url)
+)
+ruleset_snapshots(
+  id PK, source_id FK, sha256 TEXT NOT NULL,
+  raw BYTEA NOT NULL, domain_count INT NOT NULL,
+  is_current BOOLEAN NOT NULL DEFAULT FALSE,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source_id, sha256)
+)
+-- partial unique: один is_current на source
+CREATE UNIQUE INDEX ix_snapshots_one_current_per_source
+  ON ruleset_snapshots(source_id) WHERE is_current = TRUE;
+
+-- Subscription (stage 12 column)
+ALTER TABLE subscriptions
+  ADD COLUMN routing_profile TEXT NOT NULL DEFAULT 'plain'
+  CHECK (routing_profile IN ('full','smart','adblock','plain'));
+```
+
+Default sources сидятся при старте api lifespan
+(`startup/ruleset_seed.py`, идемпотентно по `(kind, category, url)`).
+
+### Endpoints
+
+| Path                                          | Auth          | Назначение                                          |
+|-----------------------------------------------|---------------|-----------------------------------------------------|
+| `GET  /internal/smart_routing/config`         | HMAC          | sub-Worker / bot → ruleset payload (singbox+clash)  |
+| `POST /internal/smart_routing/set_profile`    | HMAC          | bot → set `Subscription.routing_profile` + bools    |
+| `GET  /admin/ruleset/sources`                 | JWT readonly+ | List ruleset_sources                                 |
+| `POST /admin/ruleset/sources`                 | JWT super     | Create/upsert source                                 |
+| `PATCH /admin/ruleset/sources/{id}`           | JWT super     | Toggle is_enabled / edit URL                         |
+| `GET  /admin/ruleset/snapshots`               | JWT readonly+ | List recent snapshots (filter by source)             |
+| `POST /admin/ruleset/pull`                    | JWT super     | Force-pull all enabled sources (out-of-band)         |
+
+### Bot `/config` flow
+
+1. `/config` или кнопка «📥 Получить конфиг» в главном меню.
+2. Inline keyboard: `Full · Smart · AdBlock · Plain`.
+3. Callback `cfg:set:<profile>` →
+   `POST /internal/smart_routing/set_profile`.
+4. На `200 OK` бот DM'ит:
+   * текущий профиль (label + описание),
+   * sub-Worker URL (`BOT_SUB_WORKER_BASE_URL` + `Subscription.sub_url_token`),
+   * напоминание: vless-клиент сам подтянет ruleset через `/internal/smart_routing/config`.
+
+### Метрики / Алерты
+
+* `vlessich_ruleset_pull_total{source,result}` — counter (ok/err).
+* `vlessich_ruleset_domain_count{source}` — gauge.
+* `vlessich_ruleset_last_pull_timestamp{source}` — gauge (Unix ts).
+* Alerts (`vlessich.ruleset` group):
+  * `RulesetPullFailures` — `increase(ruleset_pull_total{result="err"}[1h]) > 3`.
+  * `RulesetStale` — `time() - ruleset_last_pull_timestamp > 86400` (≥1 sutki без успешного pull).
+
+### Feature flags
+
+* `API_SMART_ROUTING_ENABLED` (default `false`) — мастер endpoint.
+  Off → `/internal/smart_routing/*` → `409 smart_routing_disabled`.
+* `API_RULESET_PULLER_ENABLED` (default `false`) — worker idle/active.
+  Off → контейнер запускается, но пропускает tick (только обновляет gauge).
+* `API_RULESET_PULL_INTERVAL_SEC` (default `21600`) — 6h cron.
+* `BOT_SMART_ROUTING_ENABLED` (default `false`) — скрывает `/config`
+  + кнопку «📥 Получить конфиг».
+* `BOT_SUB_WORKER_BASE_URL` — base URL sub-Worker'a; bot конкатенирует
+  с `sub_url_token` для DM.
+
+### Известные ограничения
+
+* Builder не учитывает client capability (sing-box ≥ 1.8 vs clash):
+  всегда возвращает оба формата, клиент выбирает сам.
+* AdBlock — только на routing-уровне (REJECT правило). DNS-блок
+  (AdGuard Home в FI-ноде) — ответственность Stage 1, независимая
+  плоскость защиты.
+* Snapshot raw payload хранится в Postgres (BYTEA). При росте
+  кол-ва источников / частоты pull — мигрировать в S3-compatible
+  объектное хранилище отдельной задачей.
+* Per-user customization (whitelist/blacklist) не реализован —
+  только 4 системных профиля.

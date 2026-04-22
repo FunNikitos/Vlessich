@@ -20,6 +20,11 @@ uvicorn app.main:app --reload --port 8000
   MTProto секрета (Stage 10, off by default; см. ARCHITECTURE §22).
 - `python -m app.workers.mtproto_broadcaster` — DM broadcaster новых
   deeplink'ов после ротации (Stage 10, off by default).
+- `python -m app.workers.ruleset_puller` — Stage 12 cron-puller (6h)
+  внешних ruleset-источников (antifilter / v2fly / custom). Off by
+  default (`API_RULESET_PULLER_ENABLED=false`); idle-tick всё равно
+  обновляет `vlessich_ruleset_last_pull_timestamp` gauge на :9104.
+  См. ARCHITECTURE §24.
 
 ## Endpoints
 
@@ -50,6 +55,13 @@ uvicorn app.main:app --reload --port 8000
 | `GET  /admin/orders`                     | JWT readonly+  | Stage 11: list orders (status/user_id filters)                |
 | `GET  /admin/orders/{id}`                | JWT readonly+  | Stage 11: order detail                                        |
 | `POST /admin/orders/{id}/refund`         | JWT superadmin | Stage 11: two-phase refund (bot HMAC push + DB transition)    |
+| `GET  /internal/smart_routing/config`    | HMAC           | Stage 12: ruleset payload (singbox JSON + clash YAML)         |
+| `POST /internal/smart_routing/set_profile` | HMAC         | Stage 12: set `Subscription.routing_profile`                   |
+| `GET  /admin/ruleset/sources`            | JWT readonly+  | Stage 12: list ruleset sources                                 |
+| `POST /admin/ruleset/sources`            | JWT superadmin | Stage 12: create/upsert ruleset source                         |
+| `PATCH /admin/ruleset/sources/{id}`      | JWT superadmin | Stage 12: toggle is_enabled / edit URL                         |
+| `GET  /admin/ruleset/snapshots`          | JWT readonly+  | Stage 12: list recent snapshots (filter by source)             |
+| `POST /admin/ruleset/pull`               | JWT superadmin | Stage 12: force-pull all enabled sources (out-of-band)         |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap                              |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: подписка + sub-URLs + devices         |
 | `POST /v1/webapp/subscription/toggle` | initData | adblock / smart_routing toggle                  |
@@ -92,6 +104,12 @@ uvicorn app.main:app --reload --port 8000
 | `API_BILLING_ENABLED` | `false` | Stage 11 master flag. Off → `/internal/payments/*` → 409 `billing_disabled`. |
 | `API_BILLING_PLAN_TTL_PENDING_SEC` | `900` | TTL стейл-PENDING ордеров; create_order чистит просрочку перед вставкой. |
 | `API_BILLING_REFUND_BOT_NOTIFY_URL` | `http://bot:8081/internal/refund/star_payment` | Bot endpoint для two-phase refund (HMAC POST). |
+| `API_SMART_ROUTING_ENABLED` | `false` | Stage 12 master flag endpoint'а. Off → `/internal/smart_routing/*` → 409 `smart_routing_disabled`. |
+| `API_RULESET_PULLER_ENABLED` | `false` | Stage 12 master flag worker'а. Off → `ruleset_puller` tick'ает, но skip'ает fetch (только обновляет gauge на :9104). |
+| `API_RULESET_PULL_INTERVAL_SEC` | `21600` | Интервал cron-pull'а (6h default; 300..604800). |
+| `API_RULESET_PULLER_METRICS_PORT` | `9104` | Порт `/metrics` ruleset_puller. |
+| `API_RULESET_HTTP_TIMEOUT_SEC` | `30` | HTTP timeout для fetch одного source. |
+| `API_RULESET_STALE_AFTER_SEC` | `86400` | Порог staleness для `RulesetStale` alert (без успешного pull). |
 
 ## Миграции
 

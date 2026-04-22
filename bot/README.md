@@ -54,3 +54,27 @@ app/
 Refund: API делает HMAC POST на `/internal/refund/star_payment`;
 handler вызывает `bot.refund_star_payment(...)` и DM'ит
 `REFUND_NOTICE` пользователю.
+
+## Smart-routing / `/config` (Stage 12)
+
+| Env | Default | Назначение |
+|---|---|---|
+| `BOT_SMART_ROUTING_ENABLED` | `false` | Master flag для `/config` + кнопки «📥 Получить конфиг». Off → handler/кнопка скрыты. |
+| `BOT_SUB_WORKER_BASE_URL` | — | Public sub-Worker base URL. Bot конкатенирует с `Subscription.sub_url_token` для DM-deeplink'а. |
+
+### Flow
+
+1. `/config` или кнопка «📥 Получить конфиг» в главном меню.
+2. Inline keyboard: **Full · Smart · AdBlock · Plain**.
+3. Callback `cfg:set:<profile>` → `api.set_routing_profile(tg_id, profile)`
+   (HMAC `POST /internal/smart_routing/set_profile`).
+4. На `200 OK` бот DM'ит:
+   * текущий профиль (label + краткое описание),
+   * sub-Worker URL = `{BOT_SUB_WORKER_BASE_URL}/{sub_url_token}`,
+   * напоминание: vless-клиент сам подтянет ruleset через
+     `/internal/smart_routing/config` (singbox + clash формат).
+
+Профили: `full` (RU direct + proxy others + ads block, DoD TZ §16),
+`smart` (RU direct + proxy), `adblock` (всё direct + ads block,
+TZ §18.6 DNS-only), `plain` (Stage 2 baseline, всё через VPN).
+См. `docs/ARCHITECTURE.md §24`.

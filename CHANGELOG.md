@@ -7,6 +7,146 @@
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-04-22 — Stage 12: Smart-routing + RU-lists + AdBlock
+
+### Architecture
+
+Закрывает DoD из TZ §16: «`sber.ru` идёт direct, `youtube.com` — через
+proxy, реклама блокируется». Появляется три независимых, но
+скомбинируемых слоя:
+
+1. **Ruleset storage** (Postgres) — таблицы `ruleset_sources` (CRUD'абельные
+   feeds: `antifilter` / `v2fly_geosite` / `custom`, category `ru` / `ads`)
+   + `ruleset_snapshots` (versioned raw payloads, partial-unique
+   `is_current`, dedup по `(source_id, sha256)`).
+2. **Ruleset puller** (`api.workers.ruleset_puller`) — крон-фетч раз в 6h
+   (`API_RULESET_PULL_INTERVAL_SEC`, master-flag `API_RULESET_PULLER_ENABLED`)
+   с per-source изоляцией ошибок через `session.begin_nested()`. Метрики:
+   `vlessich_ruleset_pull_total{result}`, `vlessich_ruleset_domain_count`,
+   `vlessich_ruleset_last_pull_timestamp_seconds` (порт 9104).
+3. **Routing builder** (`api.services.ruleset.builder`) — sans-I/O рендер
+   sing-box JSON (primary, TZ §8.4) и Clash YAML (fallback). Ads-rules
+   эмиттятся ДО RU-rules чтобы блокировка побеждала direct на RU TLD'ах.
+   `final='proxy'` гарантирует, что всё неизвестное идёт через VPN.
+
+Подписка получает новую колонку `Subscription.routing_profile`
+(`full|smart|adblock|plain`, default `plain`) — определяет, как builder
+собирает routing-блок:
+
+| Profile  | smart_routing | adblock | UX                                     |
+|----------|---------------|---------|----------------------------------------|
+| `full`   | ✅            | ✅      | RU direct + блок рекламы + proxy       |
+| `smart`  | ✅            | ❌      | RU direct + proxy, рекламу пропускаем  |
+| `adblock`| ❌            | ✅      | Всё direct, только режут рекламу       |
+| `plain`  | ❌            | ❌      | Всё через VPN (поведение Stage 2)      |
+
+Для existing subs профиль backfill'ится в `'plain'` миграцией 0007 —
+никто не теряет VPN.
+
+### Bot UX (T12B)
+
+Новая команда `/config` и кнопка «📥 Получить конфиг» в главном меню
+(скрыта `BOT_SMART_ROUTING_ENABLED=false`). Пользователь видит inline
+keyboard из 4 профилей; на клик `ApiClient.set_routing_profile`
+обновляет `Subscription.routing_profile` + зеркалит legacy bool'ы
+`smart_routing`/`adblock`. После апдейта бот шлёт сообщение со
+ссылками `https://sub.<brand>/<token>?fmt=singbox|clash` (если
+`BOT_SUB_WORKER_BASE_URL` настроен).
+
+### API
+
+* `POST /internal/smart_routing/config` (HMAC) — рендер sing-box JSON
+  или Clash YAML по `tg_id` + `fmt`. Гейт `API_SMART_ROUTING_ENABLED`.
+* `POST /internal/smart_routing/set_profile` (HMAC) — переключатель
+  профиля для активной подписки + sync legacy bool'ов.
+* `GET /admin/ruleset/sources` (readonly+) — список sources с
+  current snapshot count.
+* `POST /admin/ruleset/sources` (superadmin) — добавить feed.
+* `PATCH /admin/ruleset/sources/{id}` (superadmin) — редактировать
+  url/category/is_enabled.
+* `DELETE /admin/ruleset/sources/{id}` (superadmin) — удалить feed.
+* `POST /admin/ruleset/sources/{id}/pull` (superadmin) — force-pull
+  одного source синхронно.
+* `GET /admin/ruleset/sources/{id}/snapshots` (readonly+) — история
+  последних 50 snapshot'ов для аудита diff'ов.
+
+`/internal/sub/{token}` НЕ менялся (стабильный sub-Worker контракт).
+
+### Lifespan seed
+
+API при старте идемпотентно сидит 4 default sources (см.
+`app.startup.ruleset_seed.DEFAULT_SOURCES`):
+
+* `antifilter-domains` → `https://community.antifilter.download/list/domains.lst`
+* `v2fly-geosite-ru` → `category-ru` из `v2fly/domain-list-community`
+* `v2fly-geosite-ads` → `category-ads-all` оттуда же
+* `custom-ru` → локальный `infra/smart-routing/custom-ru.yml`
+
+Опертор может добавить/удалить sources через admin API без
+перезапуска сидера.
+
+### Observability
+
+Новая alert-группа `vlessich.ruleset` (см. `infra/prometheus/rules/`):
+
+* `RulesetPullFailures` — `rate(error)>0` за 30m → ticket.
+* `RulesetStale` — `time() - last_pull > 24h` за 1h → ticket.
+
+### Settings
+
+Новые env (`api/.env.example` + `bot/.env.example`):
+
+* `API_SMART_ROUTING_ENABLED=false`
+* `API_RULESET_PULLER_ENABLED=false`
+* `API_RULESET_PULL_INTERVAL_SEC=21600`
+* `API_RULESET_PULLER_METRICS_PORT=9104`
+* `API_RULESET_HTTP_TIMEOUT_SEC=30`
+* `API_RULESET_STALE_AFTER_SEC=86400`
+* `BOT_SMART_ROUTING_ENABLED=false`
+* `BOT_SUB_WORKER_BASE_URL=https://sub.example.com`
+
+### Migration
+
+`alembic upgrade head` → `0007_stage12`:
+* CREATE `ruleset_sources` + `ruleset_snapshots` (partial-unique
+  `is_current`, unique `(source_id, sha256)`).
+* ALTER `subscriptions` ADD `routing_profile TEXT NOT NULL DEFAULT 'plain'`
+  CHECK IN (full, smart, adblock, plain).
+
+Downgrade аккуратно убирает CHECK + колонку + таблицы в обратном порядке.
+
+### Errors
+
+Новые `ApiCode`: `SMART_ROUTING_DISABLED`, `RULESET_NOT_FOUND`,
+`RULESET_SOURCE_DISABLED`, `RULESET_PULL_FAILED`,
+`RULESET_FORMAT_UNKNOWN`, `INVALID_ROUTING_PROFILE`.
+
+### Tests
+
+* `api/tests/test_ruleset_parsers.py` — antifilter / v2fly / custom YAML
+  + парсинг реального `infra/smart-routing/custom-ru.yml`.
+* `api/tests/test_ruleset_builder.py` — детерминизм, sort-order,
+  ads-перед-ru, TZ §16 sber-direct DoD.
+* `api/tests/test_ruleset_puller.py` — ok / unchanged / error /
+  rotate-current / disabled-skip через in-memory fetcher.
+* `api/tests/test_smart_routing_endpoint.py` — 409 при выключенном
+  master-flag, set_profile синхронизирует legacy bool'ы, config
+  embed'ит RU-домены.
+* `bot/tests/test_config_handler.py` — keyboard, label coverage,
+  sub-Worker URL formatting.
+* `api/tests/test_alert_rules.py` расширен на `RulesetPullFailures` +
+  `RulesetStale`.
+
+### Security
+
+* HMAC на новых `/internal/smart_routing/*` (общий
+  `API_INTERNAL_SECRET`).
+* Admin endpoints: writes — superadmin only, reads — readonly+.
+* Routing-level adblock не трогает DNS (AGH остаётся отдельной
+  ответственностью Stage 1).
+* `Subscription.routing_profile` валидируется CHECK constraint и
+  Literal в pydantic.
+
 ## [0.11.0] — 2026-04-22 — Stage 11: Billing / Payments (Telegram Stars MVP)
 
 ### Architecture

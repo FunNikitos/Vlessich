@@ -67,6 +67,13 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 # ship off. Rotator всё равно обновляет gauge
 # vlessich_mtproto_shared_secret_age_seconds на :9102. Bot endpoint
 # /internal/notify/mtproto_rotated слушает на порту 8081 (см. bot/.env).
+# Stage 12 ruleset puller: `ruleset_puller` (port 9104, off by default).
+# Master-flags: API_SMART_ROUTING_ENABLED (endpoint), API_RULESET_PULLER_ENABLED
+# (worker), BOT_SMART_ROUTING_ENABLED (bot UI). Default sources (antifilter +
+# v2fly category-ru + category-ads-all + custom) сидятся в lifespan
+# идемпотентно. Bot `/config` отдаёт 4 профиля (full/smart/adblock/plain),
+# `Subscription.routing_profile` — single source of truth. См.
+# `docs/ARCHITECTURE.md` §24.
 ```
 
 ## API surface
@@ -102,6 +109,13 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
 | `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |
 | `POST /v1/webapp/devices/{id}/reset`  | initData | Mini-App: regenerate xray_uuid (RL 5/min)       |
+| `GET  /internal/smart_routing/config`     | HMAC          | Stage 12: ruleset payload (singbox JSON + clash YAML) |
+| `POST /internal/smart_routing/set_profile`| HMAC          | Stage 12: bot → set routing_profile (full/smart/adblock/plain) |
+| `GET  /admin/ruleset/sources`             | JWT readonly+ | Stage 12: list ruleset sources                              |
+| `POST /admin/ruleset/sources`             | JWT super     | Stage 12: create/upsert source                              |
+| `PATCH /admin/ruleset/sources/{id}`       | JWT super     | Stage 12: toggle is_enabled / edit URL                      |
+| `GET  /admin/ruleset/snapshots`           | JWT readonly+ | Stage 12: list recent snapshots                             |
+| `POST /admin/ruleset/pull`                | JWT super     | Stage 12: force-pull all enabled sources                    |
 
 ## Prod deploy
 
