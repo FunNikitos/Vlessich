@@ -13,6 +13,32 @@ Status: in_progress (branched off Stage 11 HEAD `6b2d7d3`).
 использования общей `Subscription.adblock` / `Subscription.smart_routing`
 boolean'ов (уже существуют в модели).
 
+## Routing profiles (user)
+
+Бот предлагает **выбор профиля** при получении конфига. Внутренне
+это комбинация уже существующих `Subscription.smart_routing` и
+`Subscription.adblock` bool'ов + новый `Subscription.routing_profile`
+enum (`full` / `smart` / `adblock` / `plain`).
+
+| Профиль    | smart_routing | adblock | Что делает                                                  |
+|------------|---------------|---------|-------------------------------------------------------------|
+| `full`     | on            | on      | RU-домены direct, остальное proxy, реклама block            |
+| `smart`    | on            | off     | RU direct, остальное proxy, реклама проходит                |
+| `adblock`  | off           | on      | Всё direct (VPN off-like), только реклама block             |
+| `plain`    | off           | off     | Всё через VPN, без умной маршрутизации (как до Stage 12)    |
+
+`plain` = исторический режим (Stage 2 sub_payload). `full` = DoD TZ §16.
+`adblock` = TZ §18.6 «DNS-only тариф» — только блокировка рекламы без
+реального прокси (юзер маршрутизирует всё direct, получая только
+AGH+routing adblock).
+
+Бот (`/config` или кнопка «📥 Получить конфиг»):
+1. Показывает inline-меню с 4 профилями + кратким описанием.
+2. На клик: `POST /internal/subscriptions/{id}/profile` (HMAC) →
+   апдейт `routing_profile` + boolean'ов.
+3. Выдаёт deep-link `https://sub.<brand>/<sub_url_token>?fmt=singbox|clash`
+   (фактические bool'ы читаются из Subscription при отдаче payload'а).
+
 ## Locked decisions (user, начало Stage 12)
 
 - **Ruleset output formats**: `singbox` JSON (primary — Hiddify /
@@ -98,9 +124,13 @@ boolean'ов (уже существуют в модели).
   on (source_id, sha256), payload jsonb not null, pulled_at,
   meta jsonb)`.
 - index `ix_ruleset_snapshots_source_pulled_at`.
+- `subscriptions.routing_profile text NOT NULL DEFAULT 'plain'
+  CHECK (routing_profile IN ('full','smart','adblock','plain'))`.
+- backfill: existing rows → `'plain'` (no behaviour change).
 
 ### T4 — models
 - `api/app/models.py`: `RulesetSource` + `RulesetSnapshot`.
+- `Subscription.routing_profile: Mapped[str]`.
 
 ### T5 — service: canonical parsers
 - `api/app/services/ruleset/parsers.py`:
@@ -132,6 +162,8 @@ boolean'ов (уже существуют в модели).
 - `api/app/routers/smart_routing.py`:
   - `GET /internal/smart_routing/config?sub_token=…&fmt=singbox|clash`
     (HMAC) → JSON/YAML.
+  - `POST /internal/subscriptions/{tg_id}/profile` (HMAC) →
+    смена `routing_profile` + sync `smart_routing` / `adblock` bool'ов.
 - wire в `app.main`.
 
 ### T10 — admin endpoints
@@ -148,6 +180,20 @@ boolean'ов (уже существуют в модели).
 ### T12 — Mini-App integration
 - Toggle «Умный режим» и «AdBlock» в Mini-App Settings —
   уже есть из Stage 3. Добавить preview текущих rules (domain count).
+
+### T12B — Bot config flow (NEW)
+- `bot/app/handlers/config.py`:
+  - `/config` command + callback `cfg:start` (button «📥 Получить конфиг»
+    в main menu).
+  - Inline-меню 4 профилей: `full` / `smart` / `adblock` / `plain`
+    с подписью «Что это даёт».
+  - На клик — `api_client.set_routing_profile(tg_id, profile)` →
+    DM с deep-link'ом `https://sub.<brand>/<token>?fmt=singbox` и
+    альтернативой `?fmt=clash`.
+- `bot/app/services/api_client.py`:
+  `set_routing_profile(tg_id, profile) -> SubscriptionOut`.
+- `bot/app/texts.py`: `CONFIG_PROMPT`, `CONFIG_PROFILE_*`,
+  `CONFIG_DELIVERED`.
 
 ### T13 — seed defaults
 - `app.main.lifespan`: seed default sources (antifilter, v2fly-ru,
