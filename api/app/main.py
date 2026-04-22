@@ -21,6 +21,7 @@ from app.metrics import HTTP_REQUEST_DURATION_SECONDS
 from app.routers import codes, health, internal, mtproto, public, subscriptions, trials, users, webapp
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import codes as admin_codes
+from app.routers.admin import mtproto as admin_mtproto
 from app.routers.admin import nodes as admin_nodes
 from app.routers.admin import stats as admin_stats
 from app.routers.admin import subscriptions as admin_subs
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_views.audit_router)
     app.include_router(admin_subs.router)
     app.include_router(admin_nodes.router)
+    app.include_router(admin_mtproto.router)
     app.include_router(admin_stats.router)
     app.include_router(webapp.router)
 
