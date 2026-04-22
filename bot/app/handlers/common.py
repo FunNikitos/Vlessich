@@ -23,8 +23,14 @@ def _main_kb() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🎟 Активировать код", callback_data="activate:start")],
         [InlineKeyboardButton(text="🆓 Триал на 3 дня", callback_data="trial:start")],
-        [InlineKeyboardButton(text="💳 Показать подписку", callback_data="sub:show")],
     ]
+    if settings.billing_enabled:
+        rows.append(
+            [InlineKeyboardButton(text="💎 Купить подписку", callback_data="buy:start")]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="💳 Показать подписку", callback_data="sub:show")]
+    )
     if settings.webapp_url:
         rows.append(
             [

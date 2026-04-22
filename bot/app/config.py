@@ -58,6 +58,19 @@ class Settings(BaseSettings):
     internal_notify_port: int = 8081
     internal_notify_path: str = "/internal/notify/mtproto_rotated"
 
+    # Stage 11: Billing / Telegram Stars. Master flag gates the /buy
+    # menu in the bot UI and the F.successful_payment handler. The
+    # refund endpoint on notify_server stays available regardless so
+    # admins can still issue refunds during a billing freeze.
+    billing_enabled: bool = Field(
+        default=False,
+        description="Enable /buy menu and Telegram Stars purchase flow.",
+    )
+    internal_refund_path: str = Field(
+        default="/internal/refund/star_payment",
+        description="HMAC POST endpoint on notify_server invoked by API admin refund.",
+    )
+
     @property
     def use_webhook(self) -> bool:
         return self.webhook_url is not None

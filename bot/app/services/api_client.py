@@ -45,6 +45,31 @@ class MtprotoLink:
     port: int
 
 
+@dataclass(slots=True)
+class PlanInfo:
+    code: str
+    duration_days: int
+    price_xtr: int
+    currency: str
+
+
+@dataclass(slots=True)
+class OrderDraft:
+    order_id: str
+    invoice_payload: str
+    amount_xtr: int
+    currency: str
+    plan_code: str
+    duration_days: int
+
+
+@dataclass(slots=True)
+class PaymentSuccessAck:
+    order_id: str
+    subscription_id: str
+    new_expires_at: str | None
+
+
 class ApiClient:
     def __init__(self) -> None:
         settings = get_settings()
@@ -114,6 +139,73 @@ class ApiClient:
             tg_deeplink=str(data["tg_deeplink"]),
             host=str(data["host"]),
             port=int(data["port"]),
+        )
+
+    # ----- billing (Stage 11) ---------------------------------------------
+
+    async def list_plans(self) -> list[PlanInfo]:
+        data = await self._post("/internal/payments/plans", {})
+        plans_raw = data.get("plans", [])
+        if not isinstance(plans_raw, list):
+            return []
+        out: list[PlanInfo] = []
+        for entry in plans_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                out.append(
+                    PlanInfo(
+                        code=str(entry["code"]),
+                        duration_days=int(entry["duration_days"]),
+                        price_xtr=int(entry["price_xtr"]),
+                        currency=str(entry.get("currency", "XTR")),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
+
+    async def create_order(self, *, tg_id: int, plan_code: str) -> OrderDraft:
+        data = await self._post(
+            "/internal/payments/create_order",
+            {"tg_id": tg_id, "plan_code": plan_code},
+        )
+        return OrderDraft(
+            order_id=str(data["order_id"]),
+            invoice_payload=str(data["invoice_payload"]),
+            amount_xtr=int(data["amount_xtr"]),
+            currency=str(data.get("currency", "XTR")),
+            plan_code=str(data["plan_code"]),
+            duration_days=int(data["duration_days"]),
+        )
+
+    async def precheck_order(self, *, invoice_payload: str, amount_xtr: int) -> bool:
+        data = await self._post(
+            "/internal/payments/precheck",
+            {"invoice_payload": invoice_payload, "amount_xtr": amount_xtr},
+        )
+        return bool(data.get("ok", False))
+
+    async def notify_payment_success(
+        self,
+        *,
+        invoice_payload: str,
+        amount_xtr: int,
+        telegram_payment_charge_id: str,
+        provider_payment_charge_id: str | None,
+    ) -> PaymentSuccessAck:
+        body: dict[str, Any] = {
+            "invoice_payload": invoice_payload,
+            "amount_xtr": amount_xtr,
+            "telegram_payment_charge_id": telegram_payment_charge_id,
+        }
+        if provider_payment_charge_id is not None:
+            body["provider_payment_charge_id"] = provider_payment_charge_id
+        data = await self._post("/internal/payments/success", body)
+        return PaymentSuccessAck(
+            order_id=str(data["order_id"]),
+            subscription_id=str(data["subscription_id"]),
+            new_expires_at=_opt_str(data.get("new_expires_at")),
         )
 
     # ----- internal -------------------------------------------------------

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from aiogram import Router
 
-from app.handlers import activation, common, mtproto, subscription, trial
+from app.handlers import activation, common, mtproto, purchase, subscription, trial
 
 router = Router(name="root")
 router.include_router(common.router)
@@ -15,5 +15,6 @@ router.include_router(activation.router)
 router.include_router(trial.router)
 router.include_router(subscription.router)
 router.include_router(mtproto.router)
+router.include_router(purchase.router)
 
 __all__ = ["router"]
