@@ -81,6 +81,25 @@ REFUNDS_TOTAL: Final = Counter(
 )
 
 
+# Stage 12: Smart-routing ruleset puller.
+# result: ok | unchanged | error
+RULESET_PULL_TOTAL: Final = Counter(
+    "vlessich_ruleset_pull_total",
+    "Ruleset source pull outcomes.",
+    labelnames=("source", "result"),
+)
+RULESET_DOMAIN_COUNT: Final = Gauge(
+    "vlessich_ruleset_domain_count",
+    "Domain count of the current snapshot per source.",
+    labelnames=("source", "category"),
+)
+RULESET_LAST_PULL_TIMESTAMP: Final = Gauge(
+    "vlessich_ruleset_last_pull_timestamp_seconds",
+    "Unix timestamp of the last successful pull per source.",
+    labelnames=("source",),
+)
+
+
 __all__ = [
     "HTTP_REQUEST_DURATION_SECONDS",
     "ADMIN_LOGIN_TOTAL",
@@ -91,4 +110,7 @@ __all__ = [
     "ORDERS_TOTAL",
     "REVENUE_XTR_TOTAL",
     "REFUNDS_TOTAL",
+    "RULESET_PULL_TOTAL",
+    "RULESET_DOMAIN_COUNT",
+    "RULESET_LAST_PULL_TIMESTAMP",
 ]
