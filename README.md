@@ -7,6 +7,7 @@ Control-plane в Cloudflare + финская нода (Helsinki).
 📄 **Полное ТЗ**: [`TZ.md`](./TZ.md)
 🎨 **Дизайн**: [`Design.txt`](./Design.txt) (Spotify-dark, строго)
 🤖 **Master-prompt для ИИ**: [`PROMPT.md`](./PROMPT.md)
+🚀 **Установка на Ubuntu VPS**: [`docs/DEPLOY-UBUNTU.md`](./docs/DEPLOY-UBUNTU.md) (one-liner)
 
 ## Монорепозиторий
 
@@ -23,10 +24,24 @@ Makefile            — deploy-node / tf-apply / rotate-mtg-secret / tests
 docker-compose.dev.yml
 ```
 
+## Production quickstart (Ubuntu VPS)
+
+Одна команда на чистой Ubuntu 22.04 / 24.04 (x86_64 / arm64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Neikkich/vlessich/main/scripts/install.sh \
+  | sudo BOT_TOKEN=123456:ABC... bash
+```
+
+Скрипт ставит Docker, клонит репо в `/opt/vlessich`, генерирует все
+секреты, поднимает `docker-compose.prod.yml` (all-in-one: bot + api +
+postgres + redis + webapp + admin + reminders + prober) и создаёт
+superadmin'а. Полный гайд + troubleshooting:
+[`docs/DEPLOY-UBUNTU.md`](./docs/DEPLOY-UBUNTU.md).
+
 ## Dev quickstart
 
 ```bash
-# 1. Секреты
 cp bot/.env.example bot/.env.dev
 cp api/.env.example api/.env.dev
 cp webapp/.env.example webapp/.env

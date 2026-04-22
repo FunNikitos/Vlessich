@@ -7,6 +7,71 @@
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-04-22 — Stage 13: One-liner Ubuntu installer
+
+### Added
+
+- **`scripts/install.sh`** — один скрипт для чистой Ubuntu 22.04 / 24.04
+  (x86_64 / aarch64): детектит ОС/арх, ставит apt-deps + Docker через
+  `get.docker.com`, клонит репо в `/opt/vlessich` (идемпотентно), генерит
+  секреты в `.secrets/` (`openssl rand -hex 32` для `api_internal_secret`
+  / `api_secretbox_key` / `api_jwt_secret` / `pg_password`,
+  `openssl rand -base64 24` для `admin_password`), рендерит
+  `.secrets/{db,api,bot}.env`, `docker compose up -d --build`, ждёт
+  `/healthz`, бутстрапит superadmin через CLI, печатает финальный отчёт
+  (admin URL + пароль, bot username, webhook hint).
+- **`docker-compose.prod.yml`** — all-in-one prod-стек: `db redis api
+  bot reminders prober webapp admin` по умолчанию, opt-in профили
+  `mtproto` (mtg shared + rotator + broadcaster), `ruleset`
+  (ruleset_puller). `restart: always`, volumes `pgdata` + `redisdata`
+  с appendonly redis. Все web-порты на `127.0.0.1`; `mtg :8443` —
+  единственный публичный.
+- **`api/app/scripts/create_admin.py`** — идемпотентный CLI для создания
+  superadmin'а (email уже существует → no-op; `--force-reset-password`
+  для явной перезаписи).
+- **`docs/DEPLOY-UBUNTU.md`** — полный гайд: требования, one-liner,
+  разбор что делает install.sh, SSH-tunnel для доступа к
+  admin/webapp/api, Caddy reverse-proxy для публичного HTTPS,
+  webhook-setup, opt-in профили, управление стеком, бэкап/restore БД,
+  step-by-step без скрипта, troubleshooting (7 сценариев),
+  security defaults, next steps.
+- **`docs/plan-stage-13.md`** — план этапа, DoD, design.
+
+### Changed
+
+- `.gitignore` — добавлен `.secrets/` (рендерится installer'ом,
+  содержит чувствительные `.env`, `pg_password`, `admin_password`;
+  никогда не коммитится).
+
+### Topology
+
+All-in-one: bot + api + postgres + redis + webapp + admin + (опц.
+mtproto workers + ruleset puller) на **одном** Ubuntu-хосте. FI-нода
+(Xray + AGH + Caddy + mtg) остаётся на отдельной машине через
+существующий `make deploy-node` (Ansible) — не трогаем.
+
+### Security defaults
+
+- `.secrets/` — `chmod 700` dir, `chmod 600` files.
+- API/admin/webapp/postgres/redis биндятся на `127.0.0.1`.
+- Секреты всегда генерятся на хосте, в репозитории только
+  `.env.example` с placeholder'ами.
+- Installer не перегенерирует существующие секреты (предотвращает
+  разрушение зашифрованных codes/xray_uuid после re-install).
+- `ufw` автоматически не настраивается (opinionated); инструкция
+  в troubleshooting.
+
+### Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Neikkich/vlessich/main/scripts/install.sh \
+  | sudo BOT_TOKEN=123:abc bash
+```
+
+Override'ы через env: `PUBLIC_DOMAIN`, `ADMIN_EMAIL`, `VLESSICH_DIR`,
+`VLESSICH_REPO`, `VLESSICH_BRANCH`, `VLESSICH_PROFILES`,
+`VLESSICH_FORCE_OS`.
+
 ## [0.12.0] — 2026-04-22 — Stage 12: Smart-routing + RU-lists + AdBlock
 
 ### Architecture
