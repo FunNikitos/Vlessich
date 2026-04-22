@@ -33,6 +33,7 @@ uvicorn app.main:app --reload --port 8000
 | `POST /admin/subscriptions/{id}/revoke` | JWT support+ | Отзыв подписки                              |
 | `GET  /admin/nodes/{id}/health`   | JWT         | uptime 24h + p50/p95 latency + last 50 probes   |
 | `POST /admin/nodes/{id}/rotate`   | JWT superadmin | Подтверждение ротации IP (clear IP + HEALTHY) |
+| `POST /admin/mtproto/rotate`      | JWT superadmin | Ротация shared MTProto-секрета (Stage 8)        |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap                              |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: подписка + sub-URLs + devices         |
 | `POST /v1/webapp/subscription/toggle` | initData | adblock / smart_routing toggle                  |
@@ -55,6 +56,10 @@ uvicorn app.main:app --reload --port 8000
 | `API_RU_PROBE_TIMEOUT_SEC` | `8` | Таймаут одного HTTP-probe через RU прокси |
 | `API_TURNSTILE_SECRET` | — | Cloudflare Turnstile secret (unset = captcha off, dev) |
 | `API_TURNSTILE_VERIFY_URL` | `https://challenges.cloudflare.com/turnstile/v0/siteverify` | Siteverify endpoint |
+| `API_MTG_SHARED_SECRET_HEX` | — | Seed для shared MTProto-пула (32 hex lowercase). Unset → пул не сидится; rotate всё равно работает. |
+| `API_MTG_SHARED_CLOAK` | `www.microsoft.com` | Fake-TLS cloak domain для shared секрета. Используется seed'ом и rotate-endpoint'ом по умолчанию. |
+| `API_MTG_HOST` | `mtp.example.com` | Host в `tg://proxy` deeplink'ах. |
+| `API_MTG_PORT` | `443` | Port в `tg://proxy` deeplink'ах. |
 
 ## Миграции
 

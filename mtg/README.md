@@ -54,10 +54,41 @@ https://t.me/proxy?server=mtp.example.com&port=8443&secret=ee367a...
 
 ## Ротация секрета (раз в 30 дней или при подозрении на утечку)
 
+### Stage 8+ (рекомендуется): через admin-endpoint
+
+```bash
+curl -sX POST https://api.example.com/admin/mtproto/rotate \
+  -H "Authorization: Bearer $SUPERADMIN_JWT" \
+  -H "content-type: application/json" \
+  -d '{}'
+# → {"secret_id": "...", "secret_hex": "ab12...", "cloak_domain": "www.microsoft.com",
+#    "full_secret": "eeab12...", "config_line": "secret = \"eeab12...\"",
+#    "host": "mtp.example.com", "port": 443,
+#    "rotated_at": "2026-04-22T10:00:00Z", "revoked_secret_id": "..."}
+```
+
+API создаёт новый `MtprotoSecret(scope='shared', ACTIVE)`, REVOKE'ит
+старый, пишет `AuditLog(action='mtproto_rotated')` (без secret material).
+Дальше:
+
+1. Скопировать `config_line` из ответа в `mtg/config.toml` (заменить
+   текущую строку `secret = "..."`).
+2. `docker compose restart mtg` на mtg-VPS.
+3. **Бот автоматически разошлёт новый deep-link всем активным
+   юзерам** (см. админ-панель TZ §9A.7) — отложено до Stage 9+.
+
+> Для **dev** API сидит секрет автоматически из
+> `API_MTG_SHARED_SECRET_HEX` при старте (см. `api/README.md` →
+> Settings). В prod аналогично — секрет в env, ротация — через
+> admin-endpoint.
+
+### Manual fallback (без API)
+
 1. Сгенерировать новый секрет (см. выше).
 2. Заменить `secret = "..."` в `config.toml`.
 3. `docker compose restart mtg`.
-4. **Бот автоматически разошлёт новый deep-link всем активным юзерам** (см. админ-панель TZ §9A.7).
+4. Вручную обновить `MtprotoSecret` в БД (status='REVOKED' для
+   старого + INSERT нового ACTIVE).
 
 ## Метрики (Prometheus)
 

@@ -7,6 +7,74 @@
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-04-22 — Stage 8: MTProto (mtg) Container Wiring + Admin Rotation
+
+### Added
+- **api/config**: `mtg_shared_secret_hex: SecretStr | None` и
+  `mtg_shared_cloak: str = "www.microsoft.com"` (`API_MTG_SHARED_SECRET_HEX`,
+  `API_MTG_SHARED_CLOAK`). Используются startup-сидером и admin-rotate.
+- **api/errors**: `ApiCode.NOT_IMPLEMENTED = "not_implemented"` для
+  явного surfaced ответа 501 в боте.
+- **api/app/startup/mtproto_seed.py** (новый): идемпотентный
+  `seed_shared_secret(sm, settings)` — если пул `MtprotoSecret(scope='shared',
+  ACTIVE)` пуст и env задан (валидируется regex `^[0-9a-f]{32}$`),
+  вставляет одну строку. Иначе no-op. Вызывается в lifespan
+  `app.main` после `init_redis`.
+- **api/app/routers/admin/mtproto.py** (новый): `POST /admin/mtproto/rotate`
+  superadmin-only (`require_admin_role("superadmin")`). Минтит
+  `secrets.token_hex(16)`, REVOKEs текущий ACTIVE shared
+  (`SELECT … FOR UPDATE` для атомарности), вставляет новый ACTIVE,
+  пишет `AuditLog(action="mtproto_rotated", payload={cloak_domain,
+  revoked_secret_id})` — **без** secret material. Response: `secret_id`,
+  `secret_hex`, `cloak_domain`, `full_secret` (`ee` + 32hex + hex(cloak)),
+  `config_line` (drop-in для `mtg/config.toml`), `host`, `port`,
+  `rotated_at`, `revoked_secret_id`. Опциональный override
+  `cloak_domain` в payload. Реальный restart mtg — ручной (config на
+  отдельном VPS).
+- **docker-compose.dev.yml**: сервис `mtg` (image `nineseconds/mtg:2`,
+  mount `./mtg/config.toml:/config.toml:ro`, ports `8443:8443` +
+  `127.0.0.1:9410:9410`, healthcheck wget `/metrics` 30s/5s/3).
+- **infra/prometheus/rules/vlessich.yml**: новая группа `vlessich.mtg`
+  с alert `MtgDown` (severity=critical, `up{job="vlessich-mtg"}==0`
+  for 5m).
+- **infra/grafana/README.md**: scrape job `vlessich-mtg` (target
+  `mtg:9410`).
+- **infra/grafana/dashboards/vlessich.json**: panel id=8 «MTProto
+  (mtg) up» (stat type, thresholds 0/0.5/1, gridPos h=4,w=12,x=0,y=32).
+- **api/.env.example**: примеры `# API_MTG_SHARED_SECRET_HEX=` и
+  `API_MTG_SHARED_CLOAK=www.microsoft.com`.
+- **api/tests/test_mtproto_issue.py** (новый, Postgres-gated):
+  scope=user → 501, shared happy-path → ee-prefixed deeplink,
+  отсутствие подписки → 403.
+- **api/tests/test_admin_mtproto.py** (новый, Postgres-gated):
+  superadmin rotate → REVOKE old + INSERT new + audit без секрета;
+  support → 403; cloak override.
+- **api/tests/test_mtproto_seed.py** (новый, Postgres-gated):
+  insert when empty + idempotent на повторный вызов; пропуск без env;
+  пропуск при невалидном hex.
+
+### Changed
+- **api/app/routers/mtproto.py**: scope='user' путь возвращает
+  `501 not_implemented` (per-user MTProto отложен до Stage 9, см.
+  rationale в `docs/plan-stage-8.md`). `_pick_cloak` helper удалён
+  как unused (вернётся в Stage 9). Docstring переписан.
+- **api/app/main.py**: lifespan вызывает `seed_shared_secret(...)`
+  после `init_redis`; зарегистрирован `admin_mtproto.router`.
+
+### Security
+- Secret material (`secret_hex`, `full_secret`) **никогда** не
+  попадает в логи и `AuditLog.payload` — только `secret_id`
+  (UUID-неугадываемый). Тесты явно verify отсутствие `secret_hex`/
+  `full_secret` в audit payload.
+- `API_MTG_SHARED_SECRET_HEX` — `SecretStr`, не печатается в repr/logs.
+
+### Migration
+- DB schema без изменений (Stage 8 переиспользует `MtprotoSecret`
+  из Stage 1).
+- В env `api/.env.dev` добавить `API_MTG_SHARED_SECRET_HEX=…`
+  (32 lowercase hex). Без него startup-сидер no-op'ит и
+  `/internal/mtproto/issue` (shared) ответит 503 `no_shared_mtproto_pool`.
+
 ## [0.7.0] — 2026-04-21 — Stage 7: Logs + Alerts + Residential RU Probing
 
 ### Added

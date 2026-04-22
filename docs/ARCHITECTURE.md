@@ -887,3 +887,113 @@ before logging; promtail must not introduce new fields.
 - Per-source панели в Grafana дашборде (Stage 8 cleanup).
 - RU result как BURN signal — пока telemetry only (см. rationale выше).
 
+## 19. MTProto (mtg) Wiring + Rotation (Stage 8)
+
+Stage 8 привязывает MTProto-прокси `mtg` к control-plane: контейнер
+появляется в `docker-compose.dev.yml`, API сам сидит shared-пул при
+старте из env, а superadmin умеет ротировать секрет одним POST'ом.
+Per-user MTProto (scope='user') отложен до Stage 9 — без
+`[replicas]` / N контейнеров mtg не умеет обрабатывать разные
+секреты на одном порту.
+
+### Topology (dev)
+
+```
+bot ─HMAC──▶ api:/internal/mtproto/issue ──┐
+                                           ▼
+                                    MtprotoSecret pool
+                                    (scope='shared', ACTIVE)
+                                           │
+                                           ▼
+                                 tg://proxy?server=mtg&port=8443&secret=ee…
+                                           │
+                                           ▼
+                                    mtg:8443 (host-bound)
+                                    mtg:9410 (/metrics, 127.0.0.1 only)
+                                           │
+                                           ▼
+                                    Prometheus: vlessich-mtg scrape
+                                    Alert: MtgDown (critical, up==0 5m)
+                                    Grafana: panel id=8 «MTProto (mtg) up»
+```
+
+В prod `mtg` живёт на отдельном VPS (`mtp.example.com`, TZ §9A.8) —
+control-plane остаётся тем же, меняется только `API_MTG_HOST`.
+
+### Seed semantics (startup)
+
+`app/startup/mtproto_seed.py::seed_shared_secret`:
+
+1. Если `API_MTG_SHARED_SECRET_HEX` unset → no-op, лог `mtproto.seed.skip reason=no_env`.
+2. Если значение не матчит `^[0-9a-f]{32}$` → no-op + warning (не
+   raise: миссконфиг не должен рушить старт).
+3. Если уже есть `MtprotoSecret(scope='shared', ACTIVE)` → no-op,
+   `reason=already_present`.
+4. Иначе INSERT одной строки с `secret_hex=env`, `cloak_domain=
+   API_MTG_SHARED_CLOAK`, `status=ACTIVE`.
+
+Идемпотентность критична: lifespan вызывается на каждый старт API,
+а в prod пул живёт между рестартами. Юнит-тест
+`test_mtproto_seed.py` verify 4 ветки.
+
+### Rotation flow (admin)
+
+`POST /admin/mtproto/rotate` (superadmin-only):
+
+```
+1. SELECT MtprotoSecret FOR UPDATE
+   WHERE scope='shared' AND status='ACTIVE'
+2. IF found: current.status := REVOKED
+3. new := MtprotoSecret(
+     secret_hex = secrets.token_hex(16),
+     cloak_domain = payload.cloak_domain OR settings.mtg_shared_cloak,
+     scope='shared', status='ACTIVE'
+   )
+4. INSERT AuditLog(action='mtproto_rotated',
+                   payload={cloak_domain, revoked_secret_id})
+5. Commit.
+6. Response: {secret_id, secret_hex, cloak_domain, full_secret,
+              config_line, host, port, rotated_at, revoked_secret_id}
+```
+
+**Manual step**: оператор копирует `config_line` в
+`mtg/config.toml` на mtg-VPS и делает `docker compose restart mtg`.
+Auto-rebroadcast новых deep-links (TZ §9A.7) — отдельная задача
+follow-up stage (требует bot-side mass DM).
+
+**Security invariants** (проверены тестами):
+- `AuditLog.payload` **никогда** не содержит `secret_hex` / `full_secret`.
+- secret_hex — `CHAR(64) UNIQUE NOT NULL`, коллизия поломает INSERT
+  (обрабатывается SQL-исключением → 500).
+- `require_admin_role("superadmin")` — support/readonly получают
+  403 ещё до rotation logic.
+
+### Per-user MTProto — Stage 9
+
+Почему не в Stage 8: `mtg` umeет только один секрет на порт.
+Per-user требует либо:
+- mtg `[replicas]`-режима (pro feature, отдельная лицензия), или
+- N контейнеров mtg на портах 8443..84XX с reverse-proxy, или
+- кастомный MTProto-proxy форк.
+
+Данные готовы: `MtprotoSecret.scope='user'` + FK `user_id` +
+`mtproto_scope_user_consistency` CHECK — Stage 9 переключит только
+ветку в `routers/mtproto.py`. Пока scope='user' → 501
+`not_implemented`, бот surfaces чистый RU-текст.
+
+### Prometheus topology
+
+Новый scrape target `vlessich-mtg` (job_name=`vlessich-mtg`,
+static_configs=`[mtg:9410]`, scrape_interval=15s). Alert `MtgDown`
+живёт в группе `vlessich.mtg`, severity=critical. В Grafana
+дашборде добавлена stat-panel id=8 «MTProto (mtg) up» (thresholds:
+red<0.5, green>=0.5).
+
+### Что НЕ в этом этапе
+
+- Per-user MTProto (см. выше) — Stage 9.
+- Auto-rotation по расписанию (cron) — пока ручной admin action.
+- Auto-rebroadcast deeplinks после ротации — требует Bot-side mass DM.
+- Admin UI страница для mtg (rotate-button + current secret id) —
+  backend endpoint готов, UI отложен.
+

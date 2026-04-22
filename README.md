@@ -49,6 +49,11 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 # каждые 60s TCP-connect на hostname:443 каждой non-MAINTENANCE ноды,
 # 3 fails подряд → BURNED, 5 oks подряд → HEALTHY (см. ARCHITECTURE §16).
 # Prober также экспонирует Prometheus metrics на 127.0.0.1:9101/metrics.
+# MTProto (mtg) — сервис `mtg` (nineseconds/mtg:2, :8443 + 127.0.0.1:9410/metrics).
+# Shared-секрет сидится из API_MTG_SHARED_SECRET_HEX при старте API
+# (идемпотентно). Ротация: POST /admin/mtproto/rotate (superadmin) →
+# положить config_line из ответа в mtg/config.toml и `docker compose restart mtg`.
+# Per-user MTProto отложен до Stage 9 (scope='user' → 501 not_implemented).
 ```
 
 ## API surface
@@ -67,6 +72,7 @@ open http://localhost:8025   # mailhog UI (SMTP catcher: 127.0.0.1:1025)
 | `POST /admin/subscriptions/{id}/revoke` | JWT support+ | Отзыв подписки                              |
 | `GET  /admin/nodes/{id}/health`   | JWT         | Node health: uptime + p50/p95 + probes          |
 | `POST /admin/nodes/{id}/rotate`   | JWT superadmin | Подтверждение ротации IP (clear IP + HEALTHY) |
+| `POST /admin/mtproto/rotate`      | JWT superadmin | Ротация shared MTProto-секрета (Stage 8)        |
 | `GET  /v1/webapp/bootstrap`       | initData    | Mini-App bootstrap (user + sub summary)         |
 | `GET  /v1/webapp/subscription`    | initData    | Mini-App: моя подписка + sub-URLs + devices     |
 | `POST /v1/webapp/subscription/toggle` | initData | Mini-App: adblock / smart_routing toggle        |
