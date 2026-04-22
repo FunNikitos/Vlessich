@@ -159,3 +159,38 @@ groups:
             mass dissatisfaction, or admin tooling misuse. Audit
             `/admin/orders?status=REFUNDED` and `audit_log` for
             `order_refunded` actor distribution.
+
+  - name: vlessich.ruleset
+    interval: 60s
+    rules:
+      - alert: RulesetPullFailures
+        expr: rate(vlessich_ruleset_pull_total{result="error"}[30m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: ruleset_puller
+        annotations:
+          summary: "Ruleset puller failing for at least one source"
+          description: |
+            One or more ruleset sources have errored consistently for
+            30m. Check ``/admin/ruleset/sources`` for the offending
+            ``last_error`` and ``last_pulled_at``. The smart-routing
+            config will continue to serve the previous current
+            snapshot until a fresh pull succeeds.
+
+      - alert: RulesetStale
+        expr: |
+          (time() - vlessich_ruleset_last_pull_timestamp_seconds) > 86400
+        for: 1h
+        labels:
+          severity: warning
+          service: ruleset_puller
+        annotations:
+          summary: "Ruleset source not refreshed in 24h+"
+          description: |
+            ``{{ $labels.source }}`` last pulled
+            {{ $value | humanizeDuration }} ago. Either the puller
+            worker is down (``API_RULESET_PULLER_ENABLED=false``) or
+            the source has been failing silently. Check
+            ``vlessich_ruleset_pull_total{source="{{ $labels.source }}"}``
+            and the worker container logs.
