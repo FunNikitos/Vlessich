@@ -178,6 +178,10 @@ class Subscription(Base):
             "status IN ('ACTIVE','TRIAL','EXPIRED','REVOKED')",
             name="subscriptions_status_chk",
         ),
+        CheckConstraint(
+            "routing_profile IN ('full','smart','adblock','plain')",
+            name="ck_subscriptions_routing_profile",
+        ),
         Index(
             "ix_subscriptions_one_active_per_user",
             "user_id",
@@ -213,6 +217,12 @@ class Subscription(Base):
     remna_user_id: Mapped[str | None] = mapped_column(Text)
     last_order_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL")
+    )
+    routing_profile: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="plain",
+        server_default="plain",
     )
 
     devices: Mapped[list["Device"]] = relationship(back_populates="subscription")
@@ -513,4 +523,107 @@ class Order(Base):
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     refunded_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="SET NULL")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 12: Smart-routing — RU-lists / AdBlock sources & snapshots
+# ---------------------------------------------------------------------------
+
+
+class RulesetSource(Base):
+    """External or local domain-list feed for smart-routing.
+
+    ``kind`` discriminates the parser:
+      * ``antifilter``     — text/lst, one domain per line.
+      * ``v2fly_geosite``  — text categories from v2fly/domain-list-community.
+      * ``custom``         — locally curated YAML list (``url`` may be NULL).
+    ``category`` selects the routing bucket (``ru`` → direct; ``ads`` → block).
+    """
+
+    __tablename__ = "ruleset_sources"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_ruleset_sources_name"),
+        CheckConstraint(
+            "kind IN ('antifilter','v2fly_geosite','custom')",
+            name="ck_ruleset_sources_kind",
+        ),
+        CheckConstraint(
+            "category IN ('ru','ads')",
+            name="ck_ruleset_sources_category",
+        ),
+        CheckConstraint(
+            "(kind = 'custom') OR (url IS NOT NULL)",
+            name="ck_ruleset_sources_url_required",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    url: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ru", server_default="ru"
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_pulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class RulesetSnapshot(Base):
+    """Immutable raw payload of a successful ruleset pull.
+
+    Identical re-pulls are de-duplicated by the ``(source_id, sha256)``
+    unique index. ``is_current`` partial-unique index guarantees exactly
+    one snapshot per source is the active one used by the builder.
+    """
+
+    __tablename__ = "ruleset_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_ruleset_snapshots_source_sha",
+            "source_id",
+            "sha256",
+            unique=True,
+        ),
+        Index(
+            "ix_ruleset_snapshots_current",
+            "source_id",
+            unique=True,
+            postgresql_where=text("is_current = true"),
+        ),
+        Index(
+            "ix_ruleset_snapshots_source_fetched",
+            "source_id",
+            "fetched_at",
+        ),
+        CheckConstraint("domain_count >= 0", name="ck_ruleset_snapshots_count_nonneg"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ruleset_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    domain_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw: Mapped[str] = mapped_column(Text, nullable=False)
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
