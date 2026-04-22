@@ -278,11 +278,13 @@ EOF
   chmod 600 "${sdir}/api.env"
 
   local webhook_block=""
+  local webapp_block=""
   if [[ -n "${PUBLIC_DOMAIN}" ]]; then
     local webhook_secret
     webhook_secret="$(gen_hex32)"
     webhook_block="BOT_WEBHOOK_URL=https://${PUBLIC_DOMAIN}/telegram/webhook
 BOT_WEBHOOK_SECRET=${webhook_secret}"
+    webapp_block="BOT_WEBAPP_URL=${public_base}"
   fi
 
   cat > "${sdir}/bot.env" <<EOF
@@ -292,7 +294,7 @@ BOT_TOKEN=${BOT_TOKEN}
 BOT_API_BASE_URL=http://api:8000
 BOT_API_INTERNAL_SECRET=${internal_secret}
 BOT_REDIS_URL=redis://redis:6379/0
-BOT_WEBAPP_URL=${public_base}
+${webapp_block}
 BOT_SUPPORT_USERNAME=vlessich_support
 BOT_INTERNAL_NOTIFY_ENABLED=true
 BOT_INTERNAL_NOTIFY_HOST=0.0.0.0
