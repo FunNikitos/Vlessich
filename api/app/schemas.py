@@ -238,3 +238,83 @@ class RefundOut(BaseModel):
     order_id: str
     subscription_revoked: bool
 
+
+# ---------------------------------------------------------------------------
+# Smart-routing (Stage 12)
+# ---------------------------------------------------------------------------
+RoutingProfileLiteral = Literal["full", "smart", "adblock", "plain"]
+RulesetFormatLiteral = Literal["singbox", "clash"]
+
+
+class SmartRoutingConfigIn(BaseModel):
+    """Bot/sub-Worker → API request body for /internal/smart_routing/config."""
+
+    tg_id: int = Field(..., gt=0)
+    fmt: RulesetFormatLiteral = "singbox"
+
+
+class SmartRoutingConfigOut(BaseModel):
+    profile: RoutingProfileLiteral
+    fmt: RulesetFormatLiteral
+    body: str
+    ru_count: int
+    ads_count: int
+    generated_at: datetime
+
+
+class SetRoutingProfileIn(BaseModel):
+    """Bot → API request body to switch a subscription's routing profile."""
+
+    tg_id: int = Field(..., gt=0)
+    profile: RoutingProfileLiteral
+
+
+class SetRoutingProfileOut(BaseModel):
+    subscription_id: str
+    profile: RoutingProfileLiteral
+    adblock: bool
+    smart_routing: bool
+
+
+class RulesetSourceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    kind: Literal["antifilter", "v2fly_geosite", "custom"]
+    url: str | None
+    category: Literal["ru", "ads"]
+    is_enabled: bool
+    last_pulled_at: datetime | None
+    last_error: str | None
+    current_domain_count: int | None = None
+
+
+class RulesetSourcesListOut(BaseModel):
+    items: list[RulesetSourceOut]
+
+
+class RulesetSourceCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    kind: Literal["antifilter", "v2fly_geosite", "custom"]
+    url: str | None = Field(default=None, max_length=2048)
+    category: Literal["ru", "ads"] = "ru"
+    is_enabled: bool = True
+
+
+class RulesetSourceUpdateIn(BaseModel):
+    url: str | None = Field(default=None, max_length=2048)
+    is_enabled: bool | None = None
+    category: Literal["ru", "ads"] | None = None
+
+
+class RulesetSnapshotAdminOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    source_id: str
+    sha256: str
+    domain_count: int
+    is_current: bool
+    fetched_at: datetime
+

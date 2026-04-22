@@ -18,16 +18,18 @@ from app.db import close_engine, close_redis, get_sessionmaker, init_engine, ini
 from app.errors import ApiCode
 from app.logging import log, setup_logging
 from app.metrics import HTTP_REQUEST_DURATION_SECONDS
-from app.routers import codes, health, internal, mtproto, payments, public, subscriptions, trials, users, webapp
+from app.routers import codes, health, internal, mtproto, payments, public, smart_routing, subscriptions, trials, users, webapp
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import codes as admin_codes
 from app.routers.admin import mtproto as admin_mtproto
 from app.routers.admin import nodes as admin_nodes
 from app.routers.admin import orders as admin_orders
+from app.routers.admin import ruleset as admin_ruleset
 from app.routers.admin import stats as admin_stats
 from app.routers.admin import subscriptions as admin_subs
 from app.routers.admin import views as admin_views
 from app.startup.mtproto_seed import seed_shared_secret
+from app.startup.ruleset_seed import seed_default_ruleset_sources
 from app.services.billing import seed_default_plans
 
 
@@ -85,6 +87,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sm = get_sessionmaker()
     async with sm() as _seed_sess:
         await seed_default_plans(_seed_sess)
+    async with sm() as _rs_sess:
+        async with _rs_sess.begin():
+            await seed_default_ruleset_sources(_rs_sess)
     log.info("api.start", env=settings.env)
     try:
         yield
@@ -122,6 +127,7 @@ def create_app() -> FastAPI:
     app.include_router(trials.router)
     app.include_router(mtproto.router)
     app.include_router(payments.router)
+    app.include_router(smart_routing.router)
     app.include_router(users.router)
     app.include_router(admin_auth.router)
     app.include_router(admin_codes.router)
@@ -132,6 +138,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_nodes.router)
     app.include_router(admin_mtproto.router)
     app.include_router(admin_orders.router)
+    app.include_router(admin_ruleset.router)
     app.include_router(admin_stats.router)
     app.include_router(webapp.router)
 
