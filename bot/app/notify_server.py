@@ -31,7 +31,7 @@ from aiohttp import web
 from app.config import Settings
 from app.logging import log
 from app.services.api_client import ApiClient, ApiError
-from app.texts import MTPROTO_ROTATED
+from app.texts import MTPROTO_ROTATED, REFUND_NOTICE
 
 PATH: Final = "/internal/notify/mtproto_rotated"
 MAX_SKEW_SEC: Final = 60
@@ -138,6 +138,76 @@ def build_app(*, settings: Settings, bot: Bot) -> web.Application:
         return web.json_response({"status": "ok"}, status=200)
 
     app.router.add_post(settings.internal_notify_path, handle_mtproto_rotated)
+
+    async def handle_refund_star_payment(request: web.Request) -> web.Response:
+        """API → Bot: perform ``bot.refund_star_payment`` + notify user.
+
+        Invoked by ``POST /admin/orders/{id}/refund`` on the API side.
+        Returns 200 on success so API can transition the order to
+        REFUNDED. Any Telegram error maps to 502 so admin sees the
+        failure and can retry without DB drift.
+        """
+        body = await request.read()
+        ts = request.headers.get("x-vlessich-ts", "")
+        sig = request.headers.get("x-vlessich-sig", "")
+        if not _verify_signature(
+            secret,
+            method="POST",
+            path=settings.internal_refund_path,
+            ts=ts,
+            sig=sig,
+            body=body,
+        ):
+            log.warning("refund.bad_signature", path=settings.internal_refund_path)
+            return web.json_response(
+                {"code": "bad_signature", "message": "bad sig"}, status=401
+            )
+        try:
+            payload: dict[str, Any] = orjson.loads(body) if body else {}
+        except orjson.JSONDecodeError:
+            return web.json_response(
+                {"code": "invalid_request", "message": "bad json"}, status=400
+            )
+        if not isinstance(payload, dict):
+            return web.json_response(
+                {"code": "invalid_request", "message": "bad json"}, status=400
+            )
+        try:
+            tg_id = int(payload["tg_id"])
+            charge_id = str(payload["telegram_payment_charge_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response(
+                {"code": "invalid_request", "message": "bad payload"},
+                status=400,
+            )
+        if not charge_id:
+            return web.json_response(
+                {"code": "invalid_request", "message": "empty charge_id"},
+                status=400,
+            )
+        try:
+            await bot.refund_star_payment(
+                user_id=tg_id, telegram_payment_charge_id=charge_id
+            )
+        except TelegramAPIError as exc:
+            log.warning(
+                "refund.telegram_error", tg_id=tg_id, error=str(exc)
+            )
+            return web.json_response(
+                {"code": "payment_verification_failed", "message": str(exc)},
+                status=502,
+            )
+
+        # Best-effort courtesy DM; failure here does NOT roll back the refund.
+        try:
+            await bot.send_message(tg_id, REFUND_NOTICE)
+        except TelegramAPIError as exc:
+            log.info("refund.notice_send_failed", tg_id=tg_id, error=str(exc))
+
+        log.info("refund.done", tg_id=tg_id)
+        return web.json_response({"status": "ok"}, status=200)
+
+    app.router.add_post(settings.internal_refund_path, handle_refund_star_payment)
     return app
 
 
@@ -159,5 +229,6 @@ async def start_notify_server(
         host=settings.internal_notify_host,
         port=settings.internal_notify_port,
         path=settings.internal_notify_path,
+        refund_path=settings.internal_refund_path,
     )
     return runner
