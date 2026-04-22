@@ -1,0 +1,171 @@
+# Vlessich — prod compose (all-in-one topology, Stage 13).
+#
+# Target: single Ubuntu 22.04 / 24.04 host, control-plane + optional
+# MTProto / ruleset workers on the same machine. Rendered by
+# scripts/install.sh; secrets live under .secrets/ (gitignored),
+# not inline.
+#
+# Profiles:
+#   (default)         db redis api bot reminders prober webapp admin
+#   --profile mtproto    + mtg (shared) + mtproto_rotator + mtproto_broadcaster
+#   --profile ruleset    + ruleset_puller
+#   --profile per-user-mtg + mtg-8444..8447 (per-user pool)
+#
+# Ports exposed to 0.0.0.0 only for MTProto public endpoints; webapp /
+# admin / api / postgres / redis bind to 127.0.0.1. Put Caddy / nginx
+# in front of 8000 / 5173 / 5174 yourself if you need public HTTPS.
+
+name: vlessich
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    env_file: ./.secrets/db.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vlessich -d vlessich"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  api:
+    build: ./api
+    restart: always
+    env_file: ./.secrets/api.env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  bot:
+    build: ./bot
+    restart: always
+    env_file: ./.secrets/bot.env
+    depends_on:
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+    ports:
+      - "127.0.0.1:8081:8081"
+
+  reminders:
+    build: ./api
+    restart: always
+    env_file:
+      - ./.secrets/api.env
+      - ./.secrets/bot.env
+    depends_on:
+      db:  { condition: service_healthy }
+      api: { condition: service_started }
+    command: python -m app.workers.reminders
+
+  prober:
+    build: ./api
+    restart: always
+    env_file: ./.secrets/api.env
+    depends_on:
+      db:  { condition: service_healthy }
+      api: { condition: service_started }
+    command: python -m app.workers.prober
+    ports:
+      - "127.0.0.1:9101:9101"
+
+  webapp:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "127.0.0.1:5173:80"
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "127.0.0.1:5174:80"
+
+  # --- MTProto stack (opt-in: --profile mtproto) ---------------------
+
+  mtg:
+    profiles: ["mtproto"]
+    image: nineseconds/mtg:2
+    restart: always
+    command: ["run", "/config.toml"]
+    volumes:
+      - ./mtg/config.toml:/config.toml:ro
+    ports:
+      - "8443:8443"
+      - "127.0.0.1:9410:9410"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9410/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  mtproto_rotator:
+    profiles: ["mtproto"]
+    build: ./api
+    restart: always
+    env_file: ./.secrets/api.env
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+    command: python -m app.workers.mtproto_rotator
+    ports:
+      - "127.0.0.1:9102:9102"
+
+  mtproto_broadcaster:
+    profiles: ["mtproto"]
+    build: ./api
+    restart: always
+    env_file: ./.secrets/api.env
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api:   { condition: service_started }
+      bot:   { condition: service_started }
+    command: python -m app.workers.mtproto_broadcaster
+    ports:
+      - "127.0.0.1:9103:9103"
+
+  # --- Ruleset puller (opt-in: --profile ruleset) --------------------
+
+  ruleset_puller:
+    profiles: ["ruleset"]
+    build: ./api
+    restart: always
+    env_file: ./.secrets/api.env
+    depends_on:
+      db:  { condition: service_healthy }
+      api: { condition: service_started }
+    command: python -m app.workers.ruleset_puller
+    ports:
+      - "127.0.0.1:9104:9104"
+
+volumes:
+  pgdata:
+  redisdata:
