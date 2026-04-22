@@ -18,7 +18,7 @@ from app.db import close_engine, close_redis, get_sessionmaker, init_engine, ini
 from app.errors import ApiCode
 from app.logging import log, setup_logging
 from app.metrics import HTTP_REQUEST_DURATION_SECONDS
-from app.routers import codes, health, internal, mtproto, public, subscriptions, trials, users, webapp
+from app.routers import codes, health, internal, mtproto, payments, public, subscriptions, trials, users, webapp
 from app.routers.admin import auth as admin_auth
 from app.routers.admin import codes as admin_codes
 from app.routers.admin import mtproto as admin_mtproto
@@ -116,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(codes.router)
     app.include_router(trials.router)
     app.include_router(mtproto.router)
+    app.include_router(payments.router)
     app.include_router(users.router)
     app.include_router(admin_auth.router)
     app.include_router(admin_codes.router)

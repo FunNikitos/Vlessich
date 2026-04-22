@@ -166,3 +166,75 @@ class NodeHealthOut(BaseModel):
     latency_p95_ms: float | None
     recent_probes: list[HealthProbeOut]
 
+
+# ---------------------------------------------------------------------------
+# Billing / Payments (Stage 11, Telegram Stars MVP)
+# ---------------------------------------------------------------------------
+class PlanOut(BaseModel):
+    code: str
+    duration_days: int
+    price_xtr: int
+    currency: Literal["XTR"]
+
+
+class PlansListOut(BaseModel):
+    plans: list[PlanOut]
+
+
+class CreateOrderIn(BaseModel):
+    tg_id: int = Field(..., gt=0)
+    plan_code: str = Field(..., min_length=1, max_length=16)
+
+
+class CreateOrderOut(BaseModel):
+    order_id: str
+    invoice_payload: str
+    amount_xtr: int
+    currency: Literal["XTR"]
+    plan_code: str
+    duration_days: int
+
+
+class PrecheckIn(BaseModel):
+    invoice_payload: str = Field(..., min_length=1, max_length=128)
+    amount_xtr: int = Field(..., gt=0)
+
+
+class PaymentSuccessIn(BaseModel):
+    invoice_payload: str = Field(..., min_length=1, max_length=128)
+    amount_xtr: int = Field(..., gt=0)
+    telegram_payment_charge_id: str = Field(..., min_length=1, max_length=255)
+    provider_payment_charge_id: str | None = Field(default=None, max_length=255)
+
+
+class PaymentSuccessOut(BaseModel):
+    order_id: str
+    subscription_id: str
+    new_expires_at: datetime
+
+
+class OrderAdminOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: int
+    plan_code: str
+    amount_xtr: int
+    currency: str
+    status: str
+    telegram_payment_charge_id: str | None
+    provider_payment_charge_id: str | None
+    created_at: datetime
+    paid_at: datetime | None
+    refunded_at: datetime | None
+
+
+class OrdersListOut(BaseModel):
+    items: list[OrderAdminOut]
+    total: int
+
+
+class RefundOut(BaseModel):
+    order_id: str
+    subscription_revoked: bool
+
