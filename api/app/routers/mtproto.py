@@ -1,17 +1,21 @@
-"""MTProto secret issuance (TZ §9A).
+"""MTProto secret issuance (TZ §9A, updated Stage 8).
 
-Two scopes:
-- ``shared``  — pull a random secret from the pool (pre-seeded via admin).
-- ``user``    — mint a new 32-byte secret bound to ``user_id`` + rotating
-  cloak domain, insert into ``mtproto_secrets``. Actual push to the mtg
-  node happens in Stage 5 (node-side worker); here we only record state.
+Scopes:
 
-Gating: the requesting user must have an active or trial subscription.
-Audit log records issuance with secret id (never the secret itself).
+* ``shared`` — hand out the least-recently-created ACTIVE shared
+  secret from the pool. Seeded at API startup via
+  ``API_MTG_SHARED_SECRET_HEX`` (see ``app/startup/mtproto_seed.py``)
+  and rotated via ``POST /admin/mtproto/rotate``.
+* ``user``   — **Stage 9**. Requires mtg ``[replicas]`` orchestration
+  to bind a per-user secret to a dedicated port; until then we return
+  ``501 not_implemented`` so the bot surfaces a clean message instead
+  of handing out a secret that mtg doesn't know about.
+
+Gating: the requesting user must have an ACTIVE or TRIAL
+subscription. Audit log records issuance with the secret row id only
+(never the secret material itself).
 """
 from __future__ import annotations
-
-import secrets as pysecrets
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
@@ -36,25 +40,6 @@ def _deeplink(host: str, port: int, secret_hex: str, cloak: str) -> str:
     cloak_hex = cloak.encode().hex()
     full = f"ee{secret_hex}{cloak_hex}"
     return f"tg://proxy?server={host}&port={port}&secret={full}"
-
-
-async def _pick_cloak(session: AsyncSession, pool: list[str]) -> str:
-    if not pool:
-        raise api_error(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            ApiCode.NO_SHARED_POOL,
-            "MTProto cloak domain pool is empty.",
-        )
-    # Cheap load-balancing: pick the least-used domain within our own table.
-    counts = {d: 0 for d in pool}
-    rows = await session.execute(
-        select(MtprotoSecret.cloak_domain, MtprotoSecret.id).where(
-            MtprotoSecret.cloak_domain.in_(pool)
-        )
-    )
-    for cloak, _ in rows.all():
-        counts[cloak] = counts.get(cloak, 0) + 1
-    return min(counts.items(), key=lambda kv: kv[1])[0]
 
 
 @router.post("/issue", response_model=MtprotoOut)
@@ -105,16 +90,16 @@ async def issue(
                     "Общий MTProto пул пуст. Попробуй позже.",
                 )
         else:
-            cloak = await _pick_cloak(session, settings.mtg_cloak_domains)
-            secret = MtprotoSecret(
-                secret_hex=pysecrets.token_hex(16),
-                cloak_domain=cloak,
-                scope="user",
-                user_id=user.tg_id,
-                status="ACTIVE",
+            # Stage 8: per-user MTProto secrets require mtg [replicas]
+            # orchestration (or N mtg containers on distinct ports).
+            # Deferred to Stage 9; until then only the shared pool is
+            # live. We still keep the scope='user' column / pick_cloak
+            # helper so Stage 9 only needs to flip this branch.
+            raise api_error(
+                status.HTTP_501_NOT_IMPLEMENTED,
+                ApiCode.NOT_IMPLEMENTED,
+                "Персональный MTProto будет в следующем обновлении.",
             )
-            session.add(secret)
-            await session.flush()
 
         session.add(
             AuditLog(

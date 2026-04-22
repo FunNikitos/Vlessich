@@ -14,7 +14,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from app.config import get_settings
-from app.db import close_engine, close_redis, init_engine, init_redis
+from app.db import close_engine, close_redis, get_sessionmaker, init_engine, init_redis
 from app.errors import ApiCode
 from app.logging import log, setup_logging
 from app.metrics import HTTP_REQUEST_DURATION_SECONDS
@@ -25,6 +25,7 @@ from app.routers.admin import nodes as admin_nodes
 from app.routers.admin import stats as admin_stats
 from app.routers.admin import subscriptions as admin_subs
 from app.routers.admin import views as admin_views
+from app.startup.mtproto_seed import seed_shared_secret
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging(settings.log_level)
     init_engine(settings.database_url)
     init_redis(settings.redis_url)
+    await seed_shared_secret(get_sessionmaker(), settings)
     log.info("api.start", env=settings.env)
     try:
         yield
