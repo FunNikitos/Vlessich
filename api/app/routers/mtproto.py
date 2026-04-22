@@ -1,4 +1,4 @@
-"""MTProto secret issuance (TZ §9A, updated Stage 8).
+"""MTProto secret issuance (TZ §9A; Stage 9 FREE-pool model).
 
 Scopes:
 
@@ -6,14 +6,16 @@ Scopes:
   secret from the pool. Seeded at API startup via
   ``API_MTG_SHARED_SECRET_HEX`` (see ``app/startup/mtproto_seed.py``)
   and rotated via ``POST /admin/mtproto/rotate``.
-* ``user``   — **Stage 9**. Requires mtg ``[replicas]`` orchestration
-  to bind a per-user secret to a dedicated port; until then we return
-  ``501 not_implemented`` so the bot surfaces a clean message instead
-  of handing out a secret that mtg doesn't know about.
+* ``user``   — Stage 9. Per-user secrets live in a pre-seeded pool
+  (status=FREE, one row per mtg port). The allocator claims the
+  lowest-port FREE row (``SKIP LOCKED``) and binds it to the user.
+  Gated behind ``API_MTG_PER_USER_ENABLED``: when disabled we return
+  ``501 per_user_disabled`` so the bot surfaces a clean message.
+  When enabled but the pool is empty we return ``503 pool_full``.
 
 Gating: the requesting user must have an ACTIVE or TRIAL
-subscription. Audit log records issuance with the secret row id only
-(never the secret material itself).
+subscription. Audit log records issuance with the secret row id +
+``{scope, port}`` only — never the secret material itself.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from app.errors import ApiCode, api_error
 from app.models import AuditLog, MtprotoSecret, Subscription, User
 from app.schemas import MtprotoIn, MtprotoOut
 from app.security import verify_internal_signature
+from app.services.mtproto_allocator import allocate_user_secret, deeplink
 
 router = APIRouter(
     prefix="/internal/mtproto",
@@ -36,10 +39,8 @@ router = APIRouter(
 
 
 def _deeplink(host: str, port: int, secret_hex: str, cloak: str) -> str:
-    # mtg Fake-TLS secret layout: `ee` + 32 hex (secret) + hex(cloak-domain).
-    cloak_hex = cloak.encode().hex()
-    full = f"ee{secret_hex}{cloak_hex}"
-    return f"tg://proxy?server={host}&port={port}&secret={full}"
+    """Back-compat wrapper for tests/test_helpers.py — delegates to allocator."""
+    return deeplink(host, port, secret_hex, cloak)
 
 
 @router.post("/issue", response_model=MtprotoOut)
@@ -89,17 +90,20 @@ async def issue(
                     ApiCode.NO_SHARED_POOL,
                     "Общий MTProto пул пуст. Попробуй позже.",
                 )
+            port = settings.mtg_port
         else:
-            # Stage 8: per-user MTProto secrets require mtg [replicas]
-            # orchestration (or N mtg containers on distinct ports).
-            # Deferred to Stage 9; until then only the shared pool is
-            # live. We still keep the scope='user' column / pick_cloak
-            # helper so Stage 9 only needs to flip this branch.
-            raise api_error(
-                status.HTTP_501_NOT_IMPLEMENTED,
-                ApiCode.NOT_IMPLEMENTED,
-                "Персональный MTProto будет в следующем обновлении.",
-            )
+            # Stage 9: per-user via pre-seeded FREE-pool. Feature gate
+            # so operator can deploy code before per-user mtg containers
+            # are bootstrapped.
+            if not settings.mtg_per_user_enabled:
+                raise api_error(
+                    status.HTTP_501_NOT_IMPLEMENTED,
+                    ApiCode.PER_USER_DISABLED,
+                    "Персональный MTProto выключен.",
+                )
+            secret = await allocate_user_secret(session, payload.tg_id)
+            assert secret.port is not None  # CHECK constraint guarantees this
+            port = secret.port
 
         session.add(
             AuditLog(
@@ -108,11 +112,9 @@ async def issue(
                 action="mtproto_issued",
                 target_type="mtproto_secret",
                 target_id=str(secret.id),
-                payload={"scope": payload.scope},
+                payload={"scope": payload.scope, "port": port},
             )
         )
 
-    deeplink = _deeplink(
-        settings.mtg_host, settings.mtg_port, secret.secret_hex, secret.cloak_domain
-    )
-    return MtprotoOut(tg_deeplink=deeplink, host=settings.mtg_host, port=settings.mtg_port)
+    dl = deeplink(settings.mtg_host, port, secret.secret_hex, secret.cloak_domain)
+    return MtprotoOut(tg_deeplink=dl, host=settings.mtg_host, port=port)

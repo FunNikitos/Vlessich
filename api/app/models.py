@@ -273,11 +273,32 @@ class MtprotoSecret(Base):
     __table_args__ = (
         CheckConstraint("scope IN ('shared','user')", name="mtproto_scope_chk"),
         CheckConstraint(
-            "status IN ('ACTIVE','ROTATED','REVOKED')", name="mtproto_status_chk"
+            "status IN ('ACTIVE','ROTATED','REVOKED','FREE')",
+            name="mtproto_status_chk",
         ),
         CheckConstraint(
-            "(scope = 'shared' AND user_id IS NULL) OR (scope = 'user' AND user_id IS NOT NULL)",
+            "(scope = 'shared' AND user_id IS NULL) OR ("
+            "scope = 'user' AND ("
+            "(status = 'FREE' AND user_id IS NULL) OR "
+            "(status <> 'FREE' AND user_id IS NOT NULL)"
+            "))",
             name="mtproto_scope_user_consistency",
+        ),
+        CheckConstraint(
+            "port IS NULL OR (port BETWEEN 1 AND 65535)",
+            name="mtproto_port_range",
+        ),
+        CheckConstraint(
+            "(scope = 'shared' AND port IS NULL) OR (scope = 'user' AND port IS NOT NULL)",
+            name="mtproto_user_port_consistency",
+        ),
+        CheckConstraint(
+            "scope = 'shared' OR status IN ('ACTIVE','REVOKED','FREE')",
+            name="mtproto_user_status_consistency",
+        ),
+        CheckConstraint(
+            "status <> 'FREE' OR user_id IS NULL",
+            name="mtproto_free_no_user",
         ),
     )
 
@@ -291,6 +312,7 @@ class MtprotoSecret(Base):
         BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE")
     )
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
+    port: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
