@@ -170,6 +170,45 @@ class Settings(BaseSettings):
         description="Bot endpoint that performs bot.refund_star_payment(...) on HMAC POST.",
     )
 
+    # Stage 12: Smart-routing + RU-lists + AdBlock. Master flag gates
+    # /internal/smart_routing/config and routing-extended payload in
+    # /internal/sub/{token}. Off → legacy "plain" behaviour (no
+    # routing block, no RU-direct, no ads block). Puller worker is
+    # a separate flag so it can be scheduled independently of the
+    # hot-path endpoint (e.g. seed a staging pool offline).
+    smart_routing_enabled: bool = Field(
+        default=False,
+        description="Master switch for routing-extended sub payload and /internal/smart_routing/config.",
+    )
+    ruleset_puller_enabled: bool = Field(
+        default=False,
+        description="Enable background ruleset_puller worker (antifilter / v2fly / custom).",
+    )
+    ruleset_pull_interval_sec: int = Field(
+        default=21600,
+        ge=300,
+        le=604800,
+        description="Seconds between ruleset_puller ticks (default 6h per TZ §8).",
+    )
+    ruleset_puller_metrics_port: int = Field(
+        default=9104,
+        gt=0,
+        le=65535,
+        description="Port on which ruleset_puller exposes Prometheus /metrics.",
+    )
+    ruleset_http_timeout_sec: float = Field(
+        default=30.0,
+        gt=0,
+        le=300,
+        description="Per-source HTTP timeout for ruleset fetch.",
+    )
+    ruleset_stale_after_sec: int = Field(
+        default=86400,
+        ge=3600,
+        le=1209600,
+        description="Threshold past last successful pull to mark a source STALE in alerts.",
+    )
+
     # Telegram
     bot_token: SecretStr | None = None  # для серверной валидации Mini-App initData
 

@@ -48,6 +48,12 @@ class ApiCode(StrEnum):
     ORDER_ALREADY_REFUNDED = "order_already_refunded"
     PAYMENT_AMOUNT_MISMATCH = "payment_amount_mismatch"
     PAYMENT_VERIFICATION_FAILED = "payment_verification_failed"
+    SMART_ROUTING_DISABLED = "smart_routing_disabled"
+    RULESET_NOT_FOUND = "ruleset_not_found"
+    RULESET_SOURCE_DISABLED = "ruleset_source_disabled"
+    RULESET_PULL_FAILED = "ruleset_pull_failed"
+    RULESET_FORMAT_UNKNOWN = "ruleset_format_unknown"
+    INVALID_ROUTING_PROFILE = "invalid_routing_profile"
 
 
 def api_error(status_code: int, code: ApiCode | str, message: str) -> HTTPException:
