@@ -272,6 +272,7 @@ API_ENV=prod
 API_LOG_LEVEL=INFO
 API_DATABASE_URL=postgresql+asyncpg://vlessich:${pg_pw}@db:5432/vlessich
 API_REDIS_URL=redis://redis:6379/1
+API_BOT_TOKEN=${BOT_TOKEN}
 API_INTERNAL_SECRET=${internal_secret}
 API_SECRETBOX_KEY=${secretbox}
 API_PUBLIC_BASE_URL=${public_base}
